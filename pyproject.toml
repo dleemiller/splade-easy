@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "flatbuffers>=25.9.23",
+    "numba>=0.62.1",
     "numpy>=2.3.4",
     "sentence-transformers>=5.1.2",
 ]

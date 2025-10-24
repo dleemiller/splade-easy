@@ -16,7 +16,7 @@ class ShardWriter:
 
     def __init__(self, path: str):
         self.path = Path(path)
-        self.f = open(path, "ab")
+        self.f = open(path, "ab")  # noqa: SIM115 - file must stay open for appending
         self._size = 0
 
     def append(

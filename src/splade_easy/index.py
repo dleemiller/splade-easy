@@ -3,7 +3,6 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
 
 import numpy as np
 
@@ -15,7 +14,7 @@ from .shard import ShardReader, ShardWriter
 class Document:
     doc_id: str
     text: str
-    metadata: Dict[str, str]
+    metadata: dict[str, str]
     token_ids: np.ndarray
     weights: np.ndarray
 
@@ -106,7 +105,7 @@ class SpladeIndex:
 
     # === PRIVATE: Shard Management ===
 
-    def _get_shard_paths(self) -> List[Path]:
+    def _get_shard_paths(self) -> list[Path]:
         """Get all shard file paths."""
         return sorted(self.index_dir.glob("shard_*.fb"))
 
@@ -165,7 +164,7 @@ class SpladeIndex:
         if writer.size() >= self.shard_size_bytes:
             self._rotate_shard()
 
-    def add_batch(self, docs: List[Document]) -> None:
+    def add_batch(self, docs: list[Document]) -> None:
         """
         Add multiple documents.
 
@@ -295,7 +294,7 @@ class SpladeIndex:
         self.add_batch(all_docs)
         self._save_deleted_ids()
 
-    def stats(self) -> Dict:
+    def stats(self) -> dict:
         """
         Get index statistics.
 

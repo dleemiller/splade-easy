@@ -1,11 +1,9 @@
 # src/splade_easy/utils.py
 
-from typing import Tuple
-
 import numpy as np
 
 
-def extract_splade_vectors(encoding) -> Tuple[np.ndarray, np.ndarray]:
+def extract_splade_vectors(encoding) -> tuple[np.ndarray, np.ndarray]:
     """
     Extract token IDs and weights from sentence-transformers SPLADE encoding.
 
@@ -18,12 +16,11 @@ def extract_splade_vectors(encoding) -> Tuple[np.ndarray, np.ndarray]:
     # Handle different return formats from sentence-transformers
 
     # Format 1: Dict with 'indices' and 'values'
-    if isinstance(encoding, dict):
-        if "indices" in encoding and "values" in encoding:
-            return (
-                np.array(encoding["indices"], dtype=np.uint32),
-                np.array(encoding["values"], dtype=np.float32),
-            )
+    if isinstance(encoding, dict) and "indices" in encoding and "values" in encoding:
+        return (
+            np.array(encoding["indices"], dtype=np.uint32),
+            np.array(encoding["values"], dtype=np.float32),
+        )
 
     # Format 2: Sparse tensor or array-like
     if hasattr(encoding, "indices") and hasattr(encoding, "values"):

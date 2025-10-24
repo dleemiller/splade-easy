@@ -4,7 +4,7 @@ import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
 
@@ -51,7 +51,7 @@ class SpladeRetriever:
         if mode == "memory":
             self._load_shards_to_memory()
 
-    def _get_shard_paths(self) -> List[Path]:
+    def _get_shard_paths(self) -> list[Path]:
         return sorted(self.index_dir.glob("shard_*.fb"))
 
     def _load_shards_to_memory(self):
@@ -67,7 +67,7 @@ class SpladeRetriever:
         top_k: int = 10,
         return_text: bool = False,
         num_workers: int = 1,
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """
         Search with SPLADE vectors.
 
@@ -112,7 +112,7 @@ class SpladeRetriever:
 
     def search_text(
         self, query: str, model, top_k: int = 10, return_text: bool = False, num_workers: int = 1
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """
         Convenience method: encode query text and search.
 
@@ -143,7 +143,7 @@ class SpladeRetriever:
         query_weights: np.ndarray,
         top_k: int,
         return_text: bool,
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """Search a single shard."""
         results = []
 
@@ -187,6 +187,6 @@ class SpladeRetriever:
 
         return None
 
-    def get_batch(self, doc_ids: List[str]) -> List[Optional[dict]]:
+    def get_batch(self, doc_ids: list[str]) -> list[Optional[dict]]:
         """Get multiple documents by ID."""
         return [self.get(doc_id) for doc_id in doc_ids]

@@ -1,19 +1,27 @@
-# splade-easy
+# Retrieval, SPLADE easy.
 
-A lightweight SPLADE index for small-scale document retrieval and RAG applications.
+A lightweight, portable SPLADE index for small-scale document retrieval and RAG applications.
+
 
 ## Installation
 ```bash
 pip install splade-easy
 ```
 
-## Quick Start
+## Ingest from huggingface datasets
+
+Write a configuration (see config folder). Then run
+```
+uv ingest-dataset your-config.yaml
+```
+
+## API Quick Start
 ```python
 from sentence_transformers import SentenceTransformer
 from splade_easy import SpladeIndex
 
 # Load SPLADE model
-model = SentenceTransformer('naver/splade-cocondenser-ensembledistil')
+model = SentenceTransformer('naver/splade-v3')
 
 # Create index and add documents
 index = SpladeIndex('./my_index')
@@ -24,7 +32,7 @@ index.add_text(
     model=model
 )
 
-# Search
+# Search (existing index)
 retriever = SpladeIndex.retriever('./my_index', mode='memory')
 results = retriever.search_text(
     query="What is machine learning?",
@@ -39,11 +47,12 @@ for result in results:
 ## Features
 
 - Simple API for SPLADE-based retrieval
-- Efficient FlatBuffers serialization
+- Efficient FlatBuffers deserialization
 - Two modes: disk (low memory) or memory (fast)
 - Parallel search across shards
 - Soft deletes with compaction
 - Built for small to medium datasets (up to 1M documents)
+- Portable: index on GPU, inference on CPU
 
 ## Core API
 
@@ -120,12 +129,10 @@ stats = index.stats()
 **Disk mode** (default):
 - Scans from disk each query
 - Low memory usage
-- 200-500ms per query
 - Use for: Infrequent searches, large indexes
 
 **Memory mode**:
 - Preloads all shards into RAM
-- 50-100ms per query
 - ~50MB RAM per 10K documents
 - Use for: Frequent searches, real-time applications
 
@@ -144,12 +151,12 @@ results = retriever.search_text(
 
 Compatible with sentence-transformers SPLADE models:
 
-- `naver/splade-cocondenser-ensembledistil` (recommended)
-- `prithivida/Splade_PP_en_v1`
+- `naver/splade-v3` (recommended)
+- `naver/splade-cocondenser-ensembledistil`
 
 ## Examples
 
-See `examples/basic_rag.py` for a complete example.
+See `examples/basic.py` for a complete example.
 
 ## Development
 ```bash
@@ -168,17 +175,6 @@ make test-cov
 make lint
 make format
 ```
-
-## Performance
-
-Typical performance on modern hardware:
-
-- **Indexing**: ~1000 documents/second
-- **Disk search**: 200-500ms per query
-- **Memory search**: 50-100ms per query
-- **Storage**: ~500KB per 1000 documents (with typical SPLADE sparsity)
-
-Performance scales linearly with document count for datasets under 1M documents.
 
 ## License
 

@@ -8,7 +8,7 @@ import flatbuffers
 import numpy as np
 
 # Import generated FlatBuffers code
-from .SpladeEasy import Document, KeyValue, TokenWeight
+from .SpladeEasy import Document, KeyValue
 
 
 class ShardWriter:
@@ -25,18 +25,16 @@ class ShardWriter:
         """Append a document to the shard."""
         builder = flatbuffers.Builder(1024)
 
-        # Build sparse vector
-        sparse_offsets = []
-        for tid, w in zip(token_ids, weights):
-            TokenWeight.TokenWeightStart(builder)
-            TokenWeight.TokenWeightAddTokenId(builder, int(tid))
-            TokenWeight.TokenWeightAddWeight(builder, float(w))
-            sparse_offsets.append(TokenWeight.TokenWeightEnd(builder))
+        # Build token_ids and weights arrays
+        Document.DocumentStartTokenIdsVector(builder, len(token_ids))
+        for tid in reversed(token_ids):
+            builder.PrependUint32(int(tid))
+        token_ids_vec = builder.EndVector()
 
-        Document.DocumentStartSparseVectorVector(builder, len(sparse_offsets))
-        for off in reversed(sparse_offsets):
-            builder.PrependUOffsetTRelative(off)
-        sparse_vec = builder.EndVector()
+        Document.DocumentStartWeightsVector(builder, len(weights))
+        for w in reversed(weights):
+            builder.PrependFloat32(float(w))
+        weights_vec = builder.EndVector()
 
         # Build metadata
         meta_offsets = []
@@ -61,7 +59,8 @@ class ShardWriter:
         Document.DocumentAddDocId(builder, doc_id_off)
         Document.DocumentAddText(builder, text_off)
         Document.DocumentAddMetadata(builder, metadata_vec)
-        Document.DocumentAddSparseVector(builder, sparse_vec)
+        Document.DocumentAddTokenIds(builder, token_ids_vec)
+        Document.DocumentAddWeights(builder, weights_vec)
         doc_off = Document.DocumentEnd(builder)
 
         builder.Finish(doc_off)
@@ -78,9 +77,6 @@ class ShardWriter:
 
     def close(self) -> None:
         self.f.close()
-
-
-# src/splade_easy/shard.py - Replace entire ShardReader class
 
 
 class ShardReader:
@@ -131,15 +127,9 @@ class ShardReader:
                 kv = doc.Metadata(i)
                 metadata[kv.Key().decode()] = kv.Value().decode()
 
-            # Extract sparse vector
-            num_tokens = doc.SparseVectorLength()
-            token_ids = np.empty(num_tokens, dtype=np.uint32)
-            weights = np.empty(num_tokens, dtype=np.float32)
-
-            for i in range(num_tokens):
-                tw = doc.SparseVector(i)
-                token_ids[i] = tw.TokenId()
-                weights[i] = tw.Weight()
+            # Extract sparse vector - FAST!
+            token_ids = doc.TokenIdsAsNumpy()
+            weights = doc.WeightsAsNumpy()
 
             yield {
                 "doc_id": doc.DocId().decode(),

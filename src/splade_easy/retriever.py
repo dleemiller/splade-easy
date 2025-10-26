@@ -1,6 +1,8 @@
 # src/splade_easy/retriever.py
 
+import heapq
 import json
+import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,8 +10,11 @@ from typing import Optional
 
 import numpy as np
 
-from .scoring import compute_splade_score
+from .scoring import compute_splade_score, ensure_sorted_splade_vector
 from .shard import ShardReader
+from .utils import extract_model_id, extract_splade_vectors
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -78,6 +83,11 @@ class SpladeRetriever:
             return_text: Whether to load full text
             num_workers: Number of parallel workers
         """
+        # Ensure query vectors are sorted and deduplicated for optimal scoring
+        query_tokens, query_weights = ensure_sorted_splade_vector(
+            query_tokens, query_weights, deduplicate=True
+        )
+
         shard_paths = self._get_shard_paths()
 
         if not shard_paths:
@@ -107,8 +117,8 @@ class SpladeRetriever:
                 for future in as_completed(futures):
                     results.extend(future.result())
 
-        results.sort(key=lambda x: x.score, reverse=True)
-        return results[:top_k]
+        # Use heapq.nlargest for efficient top-k merge
+        return heapq.nlargest(top_k, results, key=lambda x: x.score)
 
     def search_text(
         self, query: str, model, top_k: int = 10, return_text: bool = False, num_workers: int = 1
@@ -123,7 +133,15 @@ class SpladeRetriever:
             return_text: Whether to load full text
             num_workers: Number of parallel workers
         """
-        from .utils import extract_splade_vectors
+        # Check if query model matches index model
+        index_model_id = self.metadata.get("model_id")
+        if index_model_id:
+            query_model_id = extract_model_id(model)
+            if query_model_id != "unknown" and index_model_id != query_model_id:
+                logger.warning(
+                    f"Model mismatch! Index was created with '{index_model_id}' "
+                    f"but querying with '{query_model_id}'. Results may be inaccurate."
+                )
 
         encoding = model.encode(query)
         query_tokens, query_weights = extract_splade_vectors(encoding)
@@ -144,8 +162,9 @@ class SpladeRetriever:
         top_k: int,
         return_text: bool,
     ) -> list[SearchResult]:
-        """Search a single shard."""
-        results = []
+        """Search a single shard using heapq for efficiency."""
+        # Min heap of (score, result) - keeps the k largest scores
+        heap = []
 
         if self.mode == "memory" and shard_path in self.shard_cache:
             docs = self.shard_cache[shard_path]
@@ -162,17 +181,20 @@ class SpladeRetriever:
             )
 
             if score > 0:
-                results.append(
-                    SearchResult(
-                        doc_id=doc["doc_id"],
-                        score=score,
-                        metadata=doc["metadata"],
-                        text=doc.get("text"),
-                    )
+                result = SearchResult(
+                    doc_id=doc["doc_id"],
+                    score=score,
+                    metadata=doc["metadata"],
+                    text=doc.get("text"),
                 )
 
-        results.sort(key=lambda x: x.score, reverse=True)
-        return results[:top_k]
+                if len(heap) < top_k:
+                    heapq.heappush(heap, (score, result))
+                elif score > heap[0][0]:  # Better than worst in heap
+                    heapq.heapreplace(heap, (score, result))
+
+        # Return sorted descending by score
+        return [result for score, result in sorted(heap, reverse=True)]
 
     def get(self, doc_id: str) -> Optional[dict]:
         """Get document by ID."""

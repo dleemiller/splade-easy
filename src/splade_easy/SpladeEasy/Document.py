@@ -68,34 +68,68 @@ class Document:
         return o == 0
 
     # Document
-    def SparseVector(self, j):
+    def TokenIds(self, j):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
-            x = self._tab.Vector(o)
-            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
-            x = self._tab.Indirect(x)
-            from .TokenWeight import TokenWeight
-
-            obj = TokenWeight()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
+            a = self._tab.Vector(o)
+            return self._tab.Get(
+                flatbuffers.number_types.Uint32Flags,
+                a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 4),
+            )
+        return 0
 
     # Document
-    def SparseVectorLength(self):
+    def TokenIdsAsNumpy(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        if o != 0:
+            return self._tab.GetVectorAsNumpy(flatbuffers.number_types.Uint32Flags, o)
+        return 0
+
+    # Document
+    def TokenIdsLength(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # Document
-    def SparseVectorIsNone(self):
+    def TokenIdsIsNone(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        return o == 0
+
+    # Document
+    def Weights(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        if o != 0:
+            a = self._tab.Vector(o)
+            return self._tab.Get(
+                flatbuffers.number_types.Float32Flags,
+                a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 4),
+            )
+        return 0
+
+    # Document
+    def WeightsAsNumpy(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        if o != 0:
+            return self._tab.GetVectorAsNumpy(flatbuffers.number_types.Float32Flags, o)
+        return 0
+
+    # Document
+    def WeightsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # Document
+    def WeightsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         return o == 0
 
 
 def DocumentStart(builder):
-    builder.StartObject(4)
+    builder.StartObject(5)
 
 
 def Start(builder):
@@ -136,22 +170,40 @@ def StartMetadataVector(builder, numElems):
     return DocumentStartMetadataVector(builder, numElems)
 
 
-def DocumentAddSparseVector(builder, sparseVector):
+def DocumentAddTokenIds(builder, tokenIds):
     builder.PrependUOffsetTRelativeSlot(
-        3, flatbuffers.number_types.UOffsetTFlags.py_type(sparseVector), 0
+        3, flatbuffers.number_types.UOffsetTFlags.py_type(tokenIds), 0
     )
 
 
-def AddSparseVector(builder, sparseVector):
-    return DocumentAddSparseVector(builder, sparseVector)
+def AddTokenIds(builder, tokenIds):
+    return DocumentAddTokenIds(builder, tokenIds)
 
 
-def DocumentStartSparseVectorVector(builder, numElems):
+def DocumentStartTokenIdsVector(builder, numElems):
     return builder.StartVector(4, numElems, 4)
 
 
-def StartSparseVectorVector(builder, numElems):
-    return DocumentStartSparseVectorVector(builder, numElems)
+def StartTokenIdsVector(builder, numElems):
+    return DocumentStartTokenIdsVector(builder, numElems)
+
+
+def DocumentAddWeights(builder, weights):
+    builder.PrependUOffsetTRelativeSlot(
+        4, flatbuffers.number_types.UOffsetTFlags.py_type(weights), 0
+    )
+
+
+def AddWeights(builder, weights):
+    return DocumentAddWeights(builder, weights)
+
+
+def DocumentStartWeightsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+
+def StartWeightsVector(builder, numElems):
+    return DocumentStartWeightsVector(builder, numElems)
 
 
 def DocumentEnd(builder):

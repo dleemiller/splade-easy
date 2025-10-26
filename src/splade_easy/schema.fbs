@@ -2,11 +2,6 @@
 
 namespace SpladeEasy;
 
-table TokenWeight {
-  token_id: uint;
-  weight: float;
-}
-
 table KeyValue {
   key: string;
   value: string;
@@ -16,7 +11,8 @@ table Document {
   doc_id: string (required);
   text: string (required);
   metadata: [KeyValue];
-  sparse_vector: [TokenWeight] (required);
+  token_ids: [uint] (required);
+  weights: [float] (required);
 }
 
 root_type Document;

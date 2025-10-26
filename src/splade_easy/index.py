@@ -1,17 +1,21 @@
-# src/splade_easy/index.py
-
 import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from rich.logging import RichHandler
 
 from .retriever import SpladeRetriever
 from .scoring import ensure_sorted_splade_vector
 from .shard import ShardReader, ShardWriter
 from .utils import extract_model_id
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    handlers=[RichHandler(rich_tracebacks=True, show_time=False)],
+)
 logger = logging.getLogger(__name__)
 
 
@@ -39,8 +43,10 @@ class SpladeIndex:
 
         if self.meta_path.exists():
             self._load_metadata()
+            logger.info(f"Loaded index from {index_dir}")
         else:
             self._init_metadata()
+            logger.info(f"Created new index at {index_dir}")
 
         self.deleted_ids = self._load_deleted_ids()
         self.current_writer = None
@@ -93,13 +99,16 @@ class SpladeIndex:
         if self.current_writer is None:
             shard_path = self.index_dir / f"shard_{self.current_shard_idx:04d}.fb"
             self.current_writer = ShardWriter(str(shard_path))
+            logger.debug(f"Created shard {shard_path.name}")
         return self.current_writer
 
     def _rotate_shard(self):
         if self.current_writer:
+            size_mb = self.current_writer.size() / (1024 * 1024)
             self.current_writer.close()
             self.metadata["num_shards"] += 1
             self._save_metadata()
+            logger.debug(f"Rotated shard at {size_mb:.1f}MB")
 
         self.current_shard_idx += 1
         self.current_writer = None
@@ -141,12 +150,11 @@ class SpladeIndex:
             model_id = extract_model_id(model)
             self.metadata["model_id"] = model_id
             self._save_metadata()
-            logger.info(f"Index created with model: {model_id}")
+            logger.info(f"Index model: {model_id}")
 
-        encoding = model.encode(text)
+        encoding = model.encode(text, show_progress_bar=False)
         token_ids, weights = extract_splade_vectors(encoding)
 
-        # Sort and deduplicate (only place this happens for single adds)
         token_ids, weights = ensure_sorted_splade_vector(token_ids, weights, deduplicate=True)
 
         doc = Document(
@@ -162,14 +170,13 @@ class SpladeIndex:
             model_id = extract_model_id(model)
             self.metadata["model_id"] = model_id
             self._save_metadata()
-            logger.info(f"Index created with model: {model_id}")
+            logger.info(f"Index model: {model_id}")
 
         docs = []
         for doc_id, text, metadata in zip(doc_ids, texts, metadatas):
-            encoding = model.encode(text)
+            encoding = model.encode(text, show_progress_bar=False)
             token_ids, weights = extract_splade_vectors(encoding)
 
-            # Sort and deduplicate (only place this happens for batch adds)
             token_ids, weights = ensure_sorted_splade_vector(token_ids, weights, deduplicate=True)
 
             docs.append(
@@ -195,9 +202,12 @@ class SpladeIndex:
         self._save_deleted_ids()
         self.metadata["num_docs"] -= 1
         self._save_metadata()
+        logger.info(f"Deleted {doc_id}")
         return True
 
     def compact(self) -> None:
+        logger.info("Compacting index...")
+
         if self.current_writer:
             self.current_writer.close()
             self.current_writer = None
@@ -217,6 +227,8 @@ class SpladeIndex:
                         )
                     )
 
+        old_shards = len(self._get_shard_paths())
+
         for shard_path in self._get_shard_paths():
             shard_path.unlink()
 
@@ -227,6 +239,8 @@ class SpladeIndex:
 
         self.add_batch(all_docs)
         self._save_deleted_ids()
+
+        logger.info(f"Compacted {old_shards} shards -> {len(self._get_shard_paths())} shards")
 
     def stats(self) -> dict:
         self._ensure_flushed()

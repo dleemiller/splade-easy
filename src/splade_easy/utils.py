@@ -6,11 +6,13 @@ import numpy as np
 def extract_model_id(model) -> str:
     """Extract model ID from sentence-transformers model."""
     try:
-        if hasattr(model, "model_card_data") and model.model_card_data:
-            if hasattr(model.model_card_data, "model_id"):
-                return model.model_card_data.model_id
-            if isinstance(model.model_card_data, dict) and "model_id" in model.model_card_data:
-                return model.model_card_data["model_id"]
+        if (
+            hasattr(model, "model_card_data")
+            and model.model_card_data
+            and hasattr(model.model_card_data, "model_id")
+            and model.model_card_data.model_id
+        ):
+            return model.model_card_data.model_id
 
         if hasattr(model, "_model_card_text") and model._model_card_text:
             lines = model._model_card_text.split("\n")

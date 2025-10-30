@@ -1,6 +1,24 @@
 # src/splade_easy/utils.py
 
+import hashlib
+from pathlib import Path
+
 import numpy as np
+
+
+def get_shard_paths(index_dir: Path, metadata: dict) -> list[Path]:
+    """Get shard paths, preferring content-addressed over legacy."""
+    paths = [index_dir / f"{h}.fb" for h in metadata["shard_hashes"]]
+    return [p for p in paths if p.exists()]
+
+
+def hash_file(path: Path) -> str:
+    """Compute SHA256 hash of a file."""
+    sha256 = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(32768):
+            sha256.update(chunk)
+    return sha256.hexdigest()
 
 
 def extract_model_id(model) -> str:

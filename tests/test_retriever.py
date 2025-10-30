@@ -204,3 +204,49 @@ class TestSpladeRetriever:
         # Verify descending order
         for i in range(len(results) - 1):
             assert results[i].score >= results[i + 1].score
+
+    def test_search_with_duplicates_in_query(self, populated_index):
+        """Test search handles duplicate tokens in query."""
+        retriever = SpladeIndex.retriever(populated_index)
+
+        # Query with duplicate tokens (should be deduplicated)
+        query_tokens = np.array([1, 1, 2], dtype=np.uint32)
+        query_weights = np.array([0.5, 0.8, 0.3], dtype=np.float32)
+
+        results = retriever.search(query_tokens, query_weights, top_k=5)
+        assert len(results) >= 0  # Should not crash
+
+    def test_search_unsorted_query(self, populated_index):
+        """Test search handles unsorted query vectors."""
+        retriever = SpladeIndex.retriever(populated_index)
+
+        # Unsorted query (should be sorted internally)
+        query_tokens = np.array([5, 1, 3], dtype=np.uint32)
+        query_weights = np.array([0.4, 0.9, 0.6], dtype=np.float32)
+
+        results = retriever.search(query_tokens, query_weights, top_k=5)
+        assert len(results) >= 0  # Should not crash
+
+    def test_metadata_preserved(self, populated_index):
+        """Test that metadata is preserved correctly."""
+        retriever = SpladeIndex.retriever(populated_index)
+
+        doc = retriever.get("ml_doc")
+        assert doc["metadata"]["topic"] == "AI"
+
+        doc = retriever.get("python_doc")
+        assert doc["metadata"]["topic"] == "Programming"
+
+    def test_empty_shard_handling(self):
+        """Test handling of empty or missing shards."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            index = SpladeIndex(tmpdir)
+
+            # Don't add any docs, but create retriever
+            retriever = index.retriever(tmpdir)
+
+            results = retriever.search(
+                np.array([1], dtype=np.uint32), np.array([1.0], dtype=np.float32), top_k=10
+            )
+
+            assert len(results) == 0

@@ -15,6 +15,12 @@ Write a configuration (see config folder). Then run
 uv ingest-dataset your-config.yaml
 ```
 
+## Reshard/resize
+
+```
+uv run profile_simple.py nanomarco_index/ --shard-size 4
+```
+
 ## API Quick Start
 ```python
 from sentence_transformers import SentenceTransformer

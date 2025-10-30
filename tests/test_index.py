@@ -199,3 +199,74 @@ class TestSpladeIndex:
         retriever = SpladeIndex.retriever(temp_index_dir)
         doc = retriever.get("test_1")
         assert doc is not None
+
+    def test_reshard(self, temp_index_dir):
+        """Test resharding with different target sizes."""
+        index = SpladeIndex(temp_index_dir, shard_size_mb=0.01)
+
+        # Add many documents to create multiple shards
+        for i in range(50):
+            doc = Document(
+                doc_id=f"doc_{i}",
+                text=f"Document {i} " * 50,
+                metadata={"index": str(i)},
+                token_ids=np.random.randint(0, 1000, 20, dtype=np.uint32),
+                weights=np.random.rand(20).astype(np.float32),
+            )
+            index.add(doc)
+
+        initial_shards = index.stats()["num_shards"]
+        assert initial_shards > 1
+
+        # Reshard to larger size
+        stats = index.reshard(target_shard_size_mb=1)
+
+        assert stats["docs_written"] == 50
+        assert index.stats()["num_docs"] == 50
+
+        # Verify all content-addressed shards exist
+        assert len(index.metadata["shard_hashes"]) == index.metadata["num_shards"]
+        for shard_hash in index.metadata["shard_hashes"]:
+            shard_path = index.index_dir / f"{shard_hash}.fb"
+            assert shard_path.exists()
+
+    def test_empty_index_operations(self, temp_index_dir):
+        """Test operations on empty index."""
+        index = SpladeIndex(temp_index_dir)
+
+        assert len(index) == 0
+
+        # Search should return empty
+        retriever = index.retriever(temp_index_dir)
+        results = retriever.search(
+            np.array([1], dtype=np.uint32), np.array([1.0], dtype=np.float32)
+        )
+        assert len(results) == 0
+
+        # Get should return None
+        assert retriever.get("nonexistent") is None
+
+        # Delete should return False
+        assert index.delete("nonexistent") is False
+
+        # Compact should work
+        index.compact()
+        assert len(index) == 0
+
+    def test_content_addressed_shards(self, temp_index_dir, sample_doc):
+        """Test that shards are content-addressed (hash-based names)."""
+        index = SpladeIndex(temp_index_dir)
+        index.add(sample_doc)
+
+        # Force rotation to finalize shard
+        if index.current_writer:
+            index._rotate_shard()
+
+        # Check that shard_hashes is populated
+        assert len(index.metadata["shard_hashes"]) > 0
+
+        # Check that shard files exist with hash names
+        for shard_hash in index.metadata["shard_hashes"]:
+            shard_path = index.index_dir / f"{shard_hash}.fb"
+            assert shard_path.exists()
+            assert len(shard_hash) == 64  # SHA256 hex length

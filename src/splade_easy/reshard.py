@@ -83,13 +83,24 @@ class IndexResharder:
             # Clear deleted IDs
             self.deleted_path.unlink(missing_ok=True)
 
-            # Remove old shards
+            # Remove old shards - BUT ONLY if they're not in the new shard list
+            # This handles the case where resharding produces the same hash (no content change)
+            new_shard_set = set(self.new_shard_hashes)
+
             if not self.keep_originals:
                 for p in self.old_shards:
-                    p.unlink()
+                    # Extract hash from filename (remove .fb extension)
+                    old_hash = p.stem
+
+                    # Only delete if this hash is NOT in the new shard list
+                    if old_hash not in new_shard_set:
+                        p.unlink()
             else:
                 for p in self.old_shards:
-                    p.rename(p.with_suffix(".fb.backup"))
+                    old_hash = p.stem
+                    # Only backup if not in new shard list
+                    if old_hash not in new_shard_set:
+                        p.rename(p.with_suffix(".fb.backup"))
 
             shutil.rmtree(self.temp_dir, ignore_errors=True)
             logger.info("✓ Complete")

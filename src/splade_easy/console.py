@@ -307,6 +307,9 @@ def main(argv: list[str] | None = None) -> None:
                     num_workers=num_workers,
                 )
             except Exception as exc:
+                import traceback
+
+                traceback.print_exc()
                 console.print(f"[error]Search failed: {exc}[/error]")
                 continue
 

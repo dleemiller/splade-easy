@@ -13,7 +13,7 @@ SPLADE-Easy provides a simple interface for creating and querying sparse lexical
 ## Installation
 
 ```bash
-pip install splade-easy
+uv sync
 ```
 
 Requires **Python 3.11+**.
@@ -106,21 +106,25 @@ stats = index.stats()     # get index statistics
 ```bash
 git clone https://github.com/yourusername/splade-easy
 cd splade-easy
-uv sync
+
+# Install dev environment
+make install
 
 # Run tests
-pytest -v
+make test
 
-# With coverage
-pytest --cov
+# Run tests with coverage
+make test-cov
 
-# Format and lint
-ruff check . --fix
-ruff format .
-```
+# Lint and format
+make lint
+make format
 
----
+# Run all pre-commit hooks
+make pre-commit
 
-## License
+# Clean
 
 MIT License © 2025
+
+```

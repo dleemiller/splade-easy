@@ -43,6 +43,8 @@ class TestSpladeRetriever:
             ]
 
             index.add_batch(docs)
+            # Finalize shard to make docs available to retriever
+            index._finalize_current_shard()
             yield tmpdir
 
     def test_basic_search_disk_mode(self, populated_index):
@@ -250,3 +252,39 @@ class TestSpladeRetriever:
             )
 
             assert len(results) == 0
+
+    def test_parallel_search_with_equal_scores(self):
+        """Regression test for Bug 3: parallel search fails when documents have equal scores."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            index = SpladeIndex(tmpdir)
+
+            # Add documents with identical vectors (will have equal scores)
+            docs = [
+                Document(
+                    doc_id=f"doc_{i}",
+                    text=f"Document {i}",
+                    metadata={"index": str(i)},
+                    token_ids=np.array([1, 2, 3], dtype=np.uint32),  # Same tokens
+                    weights=np.array([0.5, 0.5, 0.5], dtype=np.float32),  # Same weights
+                )
+                for i in range(10)
+            ]
+
+            index.add_batch(docs)
+            index._finalize_current_shard()
+
+            # Search with parallel workers - this should not crash
+            retriever = index.retriever(tmpdir)
+            query_tokens = np.array([1, 2, 3], dtype=np.uint32)
+            query_weights = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+
+            # This used to fail with: TypeError: '<' not supported between instances of 'SearchResult'
+            results = retriever.search(query_tokens, query_weights, top_k=5, num_workers=2)
+
+            # All documents match and have equal scores
+            assert len(results) == 5  # top_k limit
+            assert all(r.score > 0 for r in results)
+
+            # Verify scores are equal (or very close due to floating point)
+            scores = [r.score for r in results]
+            assert all(abs(s - scores[0]) < 1e-6 for s in scores), "All scores should be equal"

@@ -164,8 +164,10 @@ class SpladeRetriever:
         return_text: bool,
     ) -> list[SearchResult]:
         """Search a single shard using heapq for efficiency."""
-        # Min heap of (score, result) - keeps the k largest scores
+        # Min heap of (score, index, result) - keeps the k largest scores
+        # Index is used as tie-breaker to avoid comparing SearchResult objects
         heap = []
+        doc_index = 0
 
         if self.mode == "memory" and shard_path in self.shard_cache:
             docs = self.shard_cache[shard_path]
@@ -190,12 +192,14 @@ class SpladeRetriever:
                 )
 
                 if len(heap) < top_k:
-                    heapq.heappush(heap, (score, result))
+                    heapq.heappush(heap, (score, doc_index, result))
                 elif score > heap[0][0]:  # Better than worst in heap
-                    heapq.heapreplace(heap, (score, result))
+                    heapq.heapreplace(heap, (score, doc_index, result))
 
-        # Return sorted descending by score
-        return [result for score, result in sorted(heap, reverse=True)]
+                doc_index += 1
+
+        # Return sorted descending by score (index is just for heap ordering)
+        return [result for score, idx, result in sorted(heap, key=lambda x: x[0], reverse=True)]
 
     def get(self, doc_id: str) -> Optional[dict]:
         """Get document by ID."""

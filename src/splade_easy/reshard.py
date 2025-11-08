@@ -47,9 +47,14 @@ class IndexResharder:
             with open(self.deleted_path) as f:
                 self.deleted_ids = {line.strip() for line in f if line.strip()}
 
-        # Find old shards (legacy or content-addressed)
-        self.old_shards = sorted(self.index_dir.glob("shard_*.fb")) or sorted(
-            self.index_dir.glob("[0-9a-f]" * 64 + ".fb")
+        # Find content-addressed shards (64-character hex filenames)
+        all_fb_files = list(self.index_dir.glob("*.fb"))
+        self.old_shards = sorted(
+            [
+                p
+                for p in all_fb_files
+                if len(p.stem) == 64 and all(c in "0123456789abcdef" for c in p.stem.lower())
+            ]
         )
 
         if not self.old_shards:
@@ -163,6 +168,7 @@ class IndexResharder:
         self.metadata["shard_hashes"] = self.new_shard_hashes
         self.metadata["num_shards"] = len(self.new_shard_hashes)
         self.metadata["num_docs"] = docs_written
+        self.metadata["shard_size_mb"] = self.target_size_bytes // (1024 * 1024)
 
         self.success = True
 

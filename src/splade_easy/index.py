@@ -152,8 +152,7 @@ class SpladeIndex:
         for doc in docs:
             self.add(doc)
 
-        # Finalize the current shard to make docs immediately available
-        self._finalize_current_shard()
+        # Save metadata but don't finalize shard - let it grow to target size
         self._save_metadata()
 
     def add_text(self, doc_id: str, text: str, metadata: dict, model) -> None:
@@ -256,6 +255,9 @@ class SpladeIndex:
 
         # Add back non-deleted docs
         self.add_batch(all_docs)
+
+        # Finalize the shard to make docs available
+        self._finalize_current_shard()
 
         # Clear deleted_ids after rebuild
         self.deleted_ids.clear()

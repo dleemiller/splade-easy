@@ -81,6 +81,9 @@ class DatasetIngest:
         if doc_ids:
             index.add_texts(doc_ids, texts, metadatas, self.model)
 
+        # Finalize any remaining shard
+        index._finalize_current_shard()
+
         stats = index.stats()
         logger.info(
             f"Complete: {stats['num_docs']} docs, {stats['num_shards']} shards, {stats['total_size_mb']:.2f}MB"

@@ -1,0 +1,16 @@
+dataset:
+  name: "fancyzhx/ag_news"
+  subset: null
+  split: "train"
+
+text_columns:
+  - "text"
+
+metadata_columns:
+  - "id"
+
+model: "naver/splade-v3"
+
+index:
+  path: "./agnews_index"
+  shard_size_mb: 32

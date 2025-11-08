@@ -1,24 +1,40 @@
 # src/splade_easy/utils.py
 
 import hashlib
+import logging
 from pathlib import Path
 
 import numpy as np
 
+logger = logging.getLogger(__name__)
 
-def get_shard_paths(index_dir: Path, metadata: dict) -> list[Path]:
-    """Get shard paths, preferring content-addressed over legacy."""
-    paths = [index_dir / f"{h}.fb" for h in metadata["shard_hashes"]]
-    return [p for p in paths if p.exists()]
+
+def get_shard_paths(index_dir: Path, metadata: dict, *, strict: bool = False) -> list[Path]:
+    """
+    Get shard paths, preferring content-addressed over legacy.
+
+    If strict=True, raise FileNotFoundError when expected shards are missing.
+    Otherwise, log a warning and return only existing shards.
+    """
+    shard_hashes = metadata.get("shard_hashes", [])
+    paths = [index_dir / f"{h}.fb" for h in shard_hashes]
+    existing = [p for p in paths if p.exists()]
+    missing = [p for p in paths if not p.exists()]
+
+    if missing:
+        msg = f"{len(missing)} shard(s) listed in metadata but missing on disk"
+        logger.warning(msg)
+        logger.debug("Missing shards: %s", ", ".join(p.name for p in missing))
+        if strict:
+            raise FileNotFoundError(f"{msg}: {', '.join(p.name for p in missing)}")
+
+    return existing
 
 
 def hash_file(path: Path) -> str:
     """Compute SHA256 hash of a file."""
-    sha256 = hashlib.sha256()
     with open(path, "rb") as f:
-        while chunk := f.read(32768):
-            sha256.update(chunk)
-    return sha256.hexdigest()
+        return hashlib.file_digest(f, "sha256").hexdigest()
 
 
 def extract_model_id(model) -> str:

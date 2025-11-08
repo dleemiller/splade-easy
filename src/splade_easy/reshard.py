@@ -4,6 +4,7 @@
 import argparse
 import json
 import logging
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -32,9 +33,11 @@ class IndexResharder:
 
     def __enter__(self):
         """Prepare for resharding."""
+        # Ensure index metadata exists
         if not self.meta_path.exists():
             raise ValueError(f"Index not found: {self.index_dir}")
 
+        # Load metadata
         with open(self.meta_path) as f:
             self.metadata = json.load(f)
 
@@ -42,7 +45,7 @@ class IndexResharder:
         self.deleted_ids = set()
         if self.deleted_path.exists():
             with open(self.deleted_path) as f:
-                self.deleted_ids = set(line.strip() for line in f if line.strip())
+                self.deleted_ids = {line.strip() for line in f if line.strip()}
 
         # Find old shards (legacy or content-addressed)
         self.old_shards = sorted(self.index_dir.glob("shard_*.fb")) or sorted(
@@ -55,7 +58,11 @@ class IndexResharder:
         logger.info(f"Resharding {len(self.old_shards)} shards")
         logger.info(f"Target size: {self.target_size_bytes / (1024*1024):.0f} MB")
 
+        # Ensure no stale temp shards from a previous interrupted run
+        if self.temp_dir.exists():
+            shutil.rmtree(self.temp_dir)
         self.temp_dir.mkdir(exist_ok=True)
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -175,44 +182,11 @@ class IndexResharder:
         writer.close()
         shard_hash = hash_file(temp_path)
         final_path = self.index_dir / f"{shard_hash}.fb"
-        shutil.move(str(temp_path), str(final_path))
+        # Same-filesystem atomic rename
+        os.replace(temp_path, final_path)
         size_mb = final_path.stat().st_size / (1024 * 1024)
         logger.info(f"  {shard_hash[:16]}... ({size_mb:.1f} MB)")
         return shard_hash
-
-
-# def verify_integrity(index_dir: str) -> bool:
-#     """Verify all shards match their hashes."""
-#     index_dir = Path(index_dir)
-#     meta_path = index_dir / "metadata.json"
-#
-#     with open(meta_path) as f:
-#         metadata = json.load(f)
-#
-#     shard_hashes = metadata.get("shard_hashes", [])
-#     if not shard_hashes:
-#         logger.warning("No shard hashes in metadata (legacy index)")
-#         return True
-#
-#     logger.info(f"Verifying {len(shard_hashes)} shards...")
-#     all_valid = True
-#
-#     for i, h in enumerate(shard_hashes, 1):
-#         path = index_dir / f"{h}.fb"
-#         if not path.exists():
-#             logger.error(f"[{i}] Missing: {h}")
-#             all_valid = False
-#             continue
-#
-#         actual = hash_file(path)
-#         if actual != h:
-#             logger.error(f"[{i}] Hash mismatch: {h[:16]}...")
-#             all_valid = False
-#         else:
-#             size_mb = path.stat().st_size / (1024 * 1024)
-#             logger.info(f"[{i}] ✓ {h[:16]}... ({size_mb:.1f} MB)")
-#
-#     return all_valid
 
 
 def main():
@@ -220,12 +194,7 @@ def main():
     parser.add_argument("index_dir", help="Index directory")
     parser.add_argument("--shard-size", type=int, default=32, help="Target shard size in MB")
     parser.add_argument("--keep-originals", action="store_true", help="Keep original shards")
-    # parser.add_argument("--verify", action="store_true", help="Verify integrity only")
     args = parser.parse_args()
-
-    # if args.verify:
-    #    valid = verify_integrity(args.index_dir)
-    #    sys.exit(0 if valid else 1)
 
     try:
         with IndexResharder(args.index_dir, args.shard_size, args.keep_originals) as resharder:

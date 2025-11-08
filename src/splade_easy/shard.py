@@ -21,9 +21,12 @@ class ShardWriter:
         Args:
             path: Path to shard file
             initial_buffer_size: Initial buffer size in bytes (default 32KB)
-                                Larger values reduce reallocations for docs with large vectors
+                                 Larger values reduce reallocations for docs with large vectors
             write_batch_size: Number of documents to batch before writing to disk (default 100)
         """
+        if write_batch_size <= 0:
+            raise ValueError(f"write_batch_size must be positive, got {write_batch_size}")
+
         self.path = Path(path)
         self.f = open(path, "ab")  # noqa: SIM115 - file must stay open for appending
         self._size = 0

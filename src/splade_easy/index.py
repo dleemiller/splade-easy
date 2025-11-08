@@ -1,8 +1,9 @@
 import json
 import logging
-import shutil
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 from rich.logging import RichHandler
@@ -94,7 +95,7 @@ class SpladeIndex:
     def _get_current_writer(self) -> ShardWriter:
         if self.current_writer is None:
             # Create temp shard that will be renamed after hashing
-            self.current_temp_path = self.index_dir / f"_temp_shard_{id(self)}.fb"
+            self.current_temp_path = self.index_dir / f"_temp_shard_{uuid4().hex}.fb"
             self.current_writer = ShardWriter(str(self.current_temp_path))
             logger.debug(f"Created temp shard {self.current_temp_path.name}")
         return self.current_writer
@@ -107,7 +108,8 @@ class SpladeIndex:
             # Hash the shard and rename to content-addressed name
             shard_hash = hash_file(self.current_temp_path)
             final_path = self.index_dir / f"{shard_hash}.fb"
-            shutil.move(str(self.current_temp_path), str(final_path))
+            # Single-filesystem atomic rename
+            os.replace(self.current_temp_path, final_path)
 
             # Update metadata
             self.metadata["shard_hashes"].append(shard_hash)

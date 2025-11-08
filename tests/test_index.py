@@ -270,3 +270,7 @@ class TestSpladeIndex:
             shard_path = index.index_dir / f"{shard_hash}.fb"
             assert shard_path.exists()
             assert len(shard_hash) == 64  # SHA256 hex length
+
+        # Ensure no temp shard files remain after rotation
+        temp_files = list(Path(temp_index_dir).glob("_temp_shard_*.fb"))
+        assert temp_files == []

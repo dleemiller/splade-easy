@@ -1,9 +1,8 @@
-# tests/test_shard.py
-
 import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from splade_easy.shard import ShardReader, ShardWriter
 
@@ -211,3 +210,17 @@ class TestShardWriter:
             assert docs[0]["metadata"]["int"] == "42"
             assert docs[0]["metadata"]["float"] == "3.14"
             assert docs[0]["metadata"]["bool"] == "True"
+
+    def test_invalid_write_batch_size_zero(self):
+        """write_batch_size=0 should raise ValueError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
+            with pytest.raises(ValueError, match="write_batch_size must be positive"):
+                ShardWriter(str(shard_path), write_batch_size=0)
+
+    def test_invalid_write_batch_size_negative(self):
+        """Negative write_batch_size should raise ValueError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
+            with pytest.raises(ValueError, match="write_batch_size must be positive"):
+                ShardWriter(str(shard_path), write_batch_size=-1)

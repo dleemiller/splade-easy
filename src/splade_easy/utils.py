@@ -64,7 +64,7 @@ def extract_model_id(model) -> str:
     return "unknown"
 
 
-def extract_splade_vectors(encoding, threshold: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+def extract_splade_vectors(encoding, threshold: float = 1e-3) -> tuple[np.ndarray, np.ndarray]:
     """
     Extract token IDs and weights from SPLADE encoding.
 

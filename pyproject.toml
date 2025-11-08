@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 ingest-dataset = "splade_easy.ingest.datasets:main"
 reshard = "splade_easy.reshard:main"
+search = "splade_easy.console:main"
 
 [project.optional-dependencies]
 dev = [

@@ -10,12 +10,16 @@ def compute_splade_score(
     doc_weights: np.ndarray,
     query_tokens: np.ndarray,
     query_weights: np.ndarray,
+    use_cosine: bool = True,
 ) -> float:
     """
     Compute SPLADE score between document and query using two-pointer merge.
 
-    SPLADE score is the sum of products of matching token weights:
-    score = sum(doc_weight[i] * query_weight[i]) for all matching tokens
+    SPLADE score can be computed as either:
+    - Dot product: sum(doc_weight[i] * query_weight[i]) for matching tokens
+    - Cosine similarity: dot_product / (||doc|| * ||query||)
+
+    Most SPLADE models and sentence-transformers use COSINE similarity by default.
 
     IMPORTANT: Assumes both token arrays are sorted and DEDUPLICATED.
     Use ensure_sorted_splade_vector() during indexing to guarantee this.
@@ -25,11 +29,12 @@ def compute_splade_score(
         doc_weights: Document token weights (float32 array)
         query_tokens: Query token IDs (uint32 array, SORTED, UNIQUE)
         query_weights: Query token weights (float32 array)
+        use_cosine: If True, use cosine similarity (default). If False, use dot product.
 
     Returns:
         Similarity score (higher is better)
     """
-    score = 0.0
+    dot_product = 0.0
     i, j = 0, 0
     n_doc = len(doc_tokens)
     n_query = len(query_tokens)
@@ -39,7 +44,7 @@ def compute_splade_score(
         query_tok = query_tokens[j]
 
         if doc_tok == query_tok:
-            score += doc_weights[i] * query_weights[j]
+            dot_product += doc_weights[i] * query_weights[j]
             i += 1
             j += 1
         elif doc_tok < query_tok:
@@ -47,7 +52,28 @@ def compute_splade_score(
         else:
             j += 1
 
-    return score
+    # If not using cosine, return raw dot product
+    if not use_cosine:
+        return dot_product
+
+    # Compute L2 norms for cosine similarity
+    # Note: For sparse vectors, we compute norm over ALL weights, not just matching ones
+    doc_norm = 0.0
+    for w in doc_weights:
+        doc_norm += w * w
+    doc_norm = np.sqrt(doc_norm)
+
+    query_norm = 0.0
+    for w in query_weights:
+        query_norm += w * w
+    query_norm = np.sqrt(query_norm)
+
+    # Avoid division by zero
+    if doc_norm == 0.0 or query_norm == 0.0:
+        return 0.0
+
+    # Cosine similarity
+    return dot_product / (doc_norm * query_norm)
 
 
 def ensure_sorted_splade_vector(

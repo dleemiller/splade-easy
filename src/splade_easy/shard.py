@@ -7,34 +7,43 @@ from pathlib import Path
 import flatbuffers
 import numpy as np
 
-# Import generated FlatBuffers code
+# Generated flatBuffers code
 from .SpladeEasy import Document, KeyValue
 
 
 class ShardWriter:
-    """Writes documents to a shard file."""
+    """Writes documents to a shard file with optimized FlatBuffers usage."""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, initial_buffer_size: int = 32768, write_batch_size: int = 100):
+        """
+        Initialize shard writer.
+
+        Args:
+            path: Path to shard file
+            initial_buffer_size: Initial buffer size in bytes (default 32KB)
+                                 Larger values reduce reallocations for docs with large vectors
+            write_batch_size: Number of documents to batch before writing to disk (default 100)
+        """
+        if write_batch_size <= 0:
+            raise ValueError(f"write_batch_size must be positive, got {write_batch_size}")
+
         self.path = Path(path)
         self.f = open(path, "ab")  # noqa: SIM115 - file must stay open for appending
         self._size = 0
+        self.initial_buffer_size = initial_buffer_size
+        self.write_batch_size = write_batch_size
+        self.write_buffer = []
 
     def append(
         self, doc_id: str, text: str, metadata: dict, token_ids: np.ndarray, weights: np.ndarray
     ) -> None:
         """Append a document to the shard."""
-        builder = flatbuffers.Builder(1024)
+        # Use larger initial buffer to avoid reallocations
+        builder = flatbuffers.Builder(self.initial_buffer_size)
 
-        # Build token_ids and weights arrays
-        Document.DocumentStartTokenIdsVector(builder, len(token_ids))
-        for tid in reversed(token_ids):
-            builder.PrependUint32(int(tid))
-        token_ids_vec = builder.EndVector()
-
-        Document.DocumentStartWeightsVector(builder, len(weights))
-        for w in reversed(weights):
-            builder.PrependFloat32(float(w))
-        weights_vec = builder.EndVector()
+        # Build token_ids and weights arrays using CreateNumpyVector
+        token_ids_vec = builder.CreateNumpyVector(token_ids)
+        weights_vec = builder.CreateNumpyVector(weights)
 
         # Build metadata
         meta_offsets = []
@@ -65,17 +74,31 @@ class ShardWriter:
 
         builder.Finish(doc_off)
 
-        # Write length-prefixed message
+        # Add to write buffer instead of immediate write
         buf = bytes(builder.Output())
-        self.f.write(struct.pack("I", len(buf)))
-        self.f.write(buf)
+        self.write_buffer.append((len(buf), buf))
         self._size += 4 + len(buf)
+
+        # Flush when batch is full
+        if len(self.write_buffer) >= self.write_batch_size:
+            self._flush()
+
+    def _flush(self) -> None:
+        """Flush buffered writes to disk."""
+        if not self.write_buffer:
+            return
+
+        # Single write of all buffered documents
+        data = b"".join(struct.pack("I", size) + buf for size, buf in self.write_buffer)
+        self.f.write(data)
+        self.write_buffer.clear()
 
     def size(self) -> int:
         """Current shard size in bytes."""
         return self._size
 
     def close(self) -> None:
+        self._flush()  # Flush any remaining buffered writes
         self.f.close()
 
 

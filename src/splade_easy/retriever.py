@@ -12,7 +12,7 @@ import numpy as np
 
 from .scoring import compute_splade_score, ensure_sorted_splade_vector
 from .shard import ShardReader
-from .utils import extract_model_id, extract_splade_vectors
+from .utils import extract_model_id, extract_splade_vectors, get_shard_paths
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,8 @@ class SpladeRetriever:
             self._load_shards_to_memory()
 
     def _get_shard_paths(self) -> list[Path]:
-        return sorted(self.index_dir.glob("shard_*.fb"))
+        """Get shard paths"""
+        return get_shard_paths(self.index_dir, self.metadata)
 
     def _load_shards_to_memory(self):
         """Load all shards into memory."""

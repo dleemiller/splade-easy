@@ -1,7 +1,9 @@
 import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 from rich.logging import RichHandler
@@ -9,7 +11,7 @@ from rich.logging import RichHandler
 from .retriever import SpladeRetriever
 from .scoring import ensure_sorted_splade_vector
 from .shard import ShardReader, ShardWriter
-from .utils import extract_model_id
+from .utils import extract_model_id, get_shard_paths, hash_file
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,7 +52,7 @@ class SpladeIndex:
 
         self.deleted_ids = self._load_deleted_ids()
         self.current_writer = None
-        self.current_shard_idx = self._get_next_shard_idx()
+        self.current_temp_path = None
 
     @classmethod
     def retriever(cls, index_dir: str, mode: str = "disk") -> SpladeRetriever:
@@ -62,6 +64,7 @@ class SpladeIndex:
             "num_docs": 0,
             "num_shards": 0,
             "shard_size_mb": self.shard_size_mb,
+            "shard_hashes": [],
             "model_id": None,
         }
         self._save_metadata()
@@ -86,36 +89,46 @@ class SpladeIndex:
                 f.write(f"{doc_id}\n")
 
     def _get_shard_paths(self) -> list[Path]:
-        return sorted(self.index_dir.glob("shard_*.fb"))
-
-    def _get_next_shard_idx(self) -> int:
-        paths = self._get_shard_paths()
-        if not paths:
-            return 0
-        last = paths[-1].stem.split("_")[1]
-        return int(last) + 1
+        """Get shard paths"""
+        return get_shard_paths(self.index_dir, self.metadata)
 
     def _get_current_writer(self) -> ShardWriter:
         if self.current_writer is None:
-            shard_path = self.index_dir / f"shard_{self.current_shard_idx:04d}.fb"
-            self.current_writer = ShardWriter(str(shard_path))
-            logger.debug(f"Created shard {shard_path.name}")
+            # Create temp shard that will be renamed after hashing
+            self.current_temp_path = self.index_dir / f"_temp_shard_{uuid4().hex}.fb"
+            self.current_writer = ShardWriter(str(self.current_temp_path))
+            logger.debug(f"Created temp shard {self.current_temp_path.name}")
         return self.current_writer
 
     def _rotate_shard(self):
         if self.current_writer:
             size_mb = self.current_writer.size() / (1024 * 1024)
             self.current_writer.close()
+
+            # Hash the shard and rename to content-addressed name
+            shard_hash = hash_file(self.current_temp_path)
+            final_path = self.index_dir / f"{shard_hash}.fb"
+            # Single-filesystem atomic rename
+            os.replace(self.current_temp_path, final_path)
+
+            # Update metadata
+            self.metadata["shard_hashes"].append(shard_hash)
             self.metadata["num_shards"] += 1
             self._save_metadata()
-            logger.debug(f"Rotated shard at {size_mb:.1f}MB")
 
-        self.current_shard_idx += 1
+            logger.debug(f"Rotated shard: {shard_hash[:16]}... ({size_mb:.1f}MB)")
+
         self.current_writer = None
+        self.current_temp_path = None
 
     def _ensure_flushed(self):
         if self.current_writer:
             self.current_writer.f.flush()
+
+    def _finalize_current_shard(self):
+        """Finalize current shard if it exists, making it available for reads."""
+        if self.current_writer:
+            self._rotate_shard()
 
     def add(self, doc: Document) -> None:
         """Add a single document. Assumes vectors are already sorted/deduplicated."""
@@ -139,7 +152,8 @@ class SpladeIndex:
         for doc in docs:
             self.add(doc)
 
-        self._ensure_flushed()
+        # Finalize the current shard to make docs immediately available
+        self._finalize_current_shard()
         self._save_metadata()
 
     def add_text(self, doc_id: str, text: str, metadata: dict, model) -> None:
@@ -192,7 +206,7 @@ class SpladeIndex:
         self.add_batch(docs)
 
     def delete(self, doc_id: str) -> bool:
-        self._ensure_flushed()
+        self._finalize_current_shard()
 
         retriever = self.retriever(str(self.index_dir))
         if retriever.get(doc_id) is None:
@@ -208,9 +222,11 @@ class SpladeIndex:
     def compact(self) -> None:
         logger.info("Compacting index...")
 
+        # Finalize current shard before compacting
         if self.current_writer:
-            self.current_writer.close()
+            self._rotate_shard()
             self.current_writer = None
+            self.current_temp_path = None
 
         all_docs = []
         for shard_path in self._get_shard_paths():
@@ -229,21 +245,56 @@ class SpladeIndex:
 
         old_shards = len(self._get_shard_paths())
 
+        # Delete old shards
         for shard_path in self._get_shard_paths():
             shard_path.unlink()
 
-        self.current_shard_idx = 0
+        # Reset metadata
         self.metadata["num_shards"] = 0
         self.metadata["num_docs"] = 0
-        self.deleted_ids.clear()
+        self.metadata["shard_hashes"] = []
 
+        # Add back non-deleted docs
         self.add_batch(all_docs)
+
+        # Clear deleted_ids after rebuild
+        self.deleted_ids.clear()
         self._save_deleted_ids()
 
         logger.info(f"Compacted {old_shards} shards -> {len(self._get_shard_paths())} shards")
 
+    def reshard(self, target_shard_size_mb: int = 32, keep_originals: bool = False) -> dict:
+        """
+        Reshard index with content-addressed shards.
+
+        Args:
+            target_shard_size_mb: Target size for new shards
+            keep_originals: Keep original shards as backup
+
+        Returns:
+            Dictionary with resharding statistics
+        """
+        from .reshard import IndexResharder
+
+        # Finalize current shard before resharding
+        if self.current_writer:
+            self._rotate_shard()
+            self.current_writer = None
+            self.current_temp_path = None
+
+        # Perform resharding
+        with IndexResharder(str(self.index_dir), target_shard_size_mb, keep_originals) as resharder:
+            stats = resharder.reshard()
+
+        # Reload metadata
+        self._load_metadata()
+        self.deleted_ids = self._load_deleted_ids()
+        self.current_temp_path = None
+
+        return stats
+
     def stats(self) -> dict:
-        self._ensure_flushed()
+        self._finalize_current_shard()
         total_size = sum(p.stat().st_size for p in self._get_shard_paths())
         return {
             "num_docs": self.metadata["num_docs"],
@@ -260,5 +311,6 @@ class SpladeIndex:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.current_writer:
-            self.current_writer.close()
+            # Finalize any remaining shard before exiting
+            self._rotate_shard()
             self._save_metadata()

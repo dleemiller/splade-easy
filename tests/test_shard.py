@@ -1,5 +1,3 @@
-# tests/test_shard.py
-
 import tempfile
 from pathlib import Path
 
@@ -9,150 +7,220 @@ import pytest
 from splade_easy.shard import ShardReader, ShardWriter
 
 
-class TestShard:
-    """Test shard reading and writing."""
+class TestShardWriter:
+    """Test ShardWriter functionality including batched writes."""
 
-    @pytest.fixture
-    def temp_shard(self):
-        """Create temporary shard file."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".fb") as f:
-            yield f.name
-        Path(f.name).unlink(missing_ok=True)
+    def test_basic_write_and_read(self):
+        """Test basic write and read cycle."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
 
-    def test_write_and_read_single_doc(self, temp_shard):
-        """Test writing and reading a single document."""
-        # Write
-        writer = ShardWriter(temp_shard)
-        writer.append(
-            doc_id="test_1",
-            text="This is a test document",
-            metadata={"source": "test", "category": "demo"},
-            token_ids=np.array([1, 5, 10], dtype=np.uint32),
-            weights=np.array([0.8, 0.5, 0.3], dtype=np.float32),
-        )
-        writer.close()
-
-        # Read
-        reader = ShardReader(temp_shard)
-        docs = list(reader.scan())
-
-        assert len(docs) == 1
-        doc = docs[0]
-
-        assert doc["doc_id"] == "test_1"
-        assert doc["text"] == "This is a test document"
-        assert doc["metadata"] == {"source": "test", "category": "demo"}
-        np.testing.assert_array_equal(doc["token_ids"], np.array([1, 5, 10]))
-        np.testing.assert_array_almost_equal(doc["weights"], np.array([0.8, 0.5, 0.3]))
-
-    def test_write_and_read_multiple_docs(self, temp_shard):
-        """Test writing and reading multiple documents."""
-        writer = ShardWriter(temp_shard)
-
-        for i in range(10):
+            # Write documents
+            writer = ShardWriter(str(shard_path))
             writer.append(
-                doc_id=f"doc_{i}",
-                text=f"Document number {i}",
-                metadata={"index": str(i)},
-                token_ids=np.array([i, i + 1, i + 2], dtype=np.uint32),
-                weights=np.array([0.1 * i, 0.2 * i, 0.3 * i], dtype=np.float32),
+                doc_id="doc1",
+                text="Test document",
+                metadata={"key": "value"},
+                token_ids=np.array([1, 2, 3], dtype=np.uint32),
+                weights=np.array([0.5, 0.6, 0.7], dtype=np.float32),
+            )
+            writer.close()
+
+            # Read back
+            reader = ShardReader(str(shard_path))
+            docs = list(reader.scan())
+
+            assert len(docs) == 1
+            assert docs[0]["doc_id"] == "doc1"
+            assert docs[0]["text"] == "Test document"
+            assert docs[0]["metadata"]["key"] == "value"
+            np.testing.assert_array_equal(docs[0]["token_ids"], [1, 2, 3])
+            np.testing.assert_array_almost_equal(docs[0]["weights"], [0.5, 0.6, 0.7])
+
+    def test_batched_writes(self):
+        """Test that batched writes work correctly."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
+
+            # Write many documents with small batch size
+            writer = ShardWriter(str(shard_path), write_batch_size=10)
+
+            for i in range(50):
+                writer.append(
+                    doc_id=f"doc_{i}",
+                    text=f"Document {i}",
+                    metadata={"index": str(i)},
+                    token_ids=np.array([i, i + 1], dtype=np.uint32),
+                    weights=np.array([0.5, 0.5], dtype=np.float32),
+                )
+
+            writer.close()
+
+            # Verify all documents readable
+            reader = ShardReader(str(shard_path))
+            docs = list(reader.scan())
+
+            assert len(docs) == 50
+            for i, doc in enumerate(docs):
+                assert doc["doc_id"] == f"doc_{i}"
+                assert doc["metadata"]["index"] == str(i)
+
+    def test_large_batch_size(self):
+        """Test with large batch size (fewer flushes)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
+
+            # Large batch size means almost everything buffered
+            writer = ShardWriter(str(shard_path), write_batch_size=1000)
+
+            for i in range(100):
+                writer.append(
+                    doc_id=f"doc_{i}",
+                    text=f"Document {i}",
+                    metadata={},
+                    token_ids=np.array([i], dtype=np.uint32),
+                    weights=np.array([0.5], dtype=np.float32),
+                )
+
+            # Everything should be in buffer, not yet written
+            assert len(writer.write_buffer) == 100
+
+            writer.close()
+
+            # Now verify written
+            reader = ShardReader(str(shard_path))
+            docs = list(reader.scan())
+            assert len(docs) == 100
+
+    def test_empty_shard(self):
+        """Test reading empty shard."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
+
+            # Create empty file
+            writer = ShardWriter(str(shard_path))
+            writer.close()
+
+            # Should read as empty
+            reader = ShardReader(str(shard_path))
+            docs = list(reader.scan())
+            assert len(docs) == 0
+
+    def test_size_tracking(self):
+        """Test that size is tracked correctly."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
+
+            writer = ShardWriter(str(shard_path))
+
+            initial_size = writer.size()
+            assert initial_size == 0
+
+            # Add document
+            writer.append(
+                doc_id="doc1",
+                text="Test",
+                metadata={},
+                token_ids=np.array([1], dtype=np.uint32),
+                weights=np.array([0.5], dtype=np.float32),
             )
 
-        writer.close()
+            # Size should increase
+            assert writer.size() > initial_size
 
-        reader = ShardReader(temp_shard)
-        docs = list(reader.scan())
+            size_before_close = writer.size()
+            writer.close()
 
-        assert len(docs) == 10
+            # File size should match tracked size
+            actual_size = shard_path.stat().st_size
+            assert actual_size == size_before_close
 
-        for i, doc in enumerate(docs):
-            assert doc["doc_id"] == f"doc_{i}"
-            assert doc["text"] == f"Document number {i}"
-            assert doc["metadata"]["index"] == str(i)
+    def test_scan_without_text(self):
+        """Test scan with load_text=False."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
 
-    def test_skip_text_loading(self, temp_shard):
-        """Test that text can be skipped during reading."""
-        writer = ShardWriter(temp_shard)
-        writer.append(
-            doc_id="test",
-            text="A" * 10000,  # Large text
-            metadata={},
-            token_ids=np.array([1], dtype=np.uint32),
-            weights=np.array([1.0], dtype=np.float32),
-        )
-        writer.close()
+            writer = ShardWriter(str(shard_path))
+            writer.append(
+                doc_id="doc1",
+                text="This is the text",
+                metadata={},
+                token_ids=np.array([1], dtype=np.uint32),
+                weights=np.array([0.5], dtype=np.float32),
+            )
+            writer.close()
 
-        reader = ShardReader(temp_shard)
-        docs = list(reader.scan(load_text=False))
+            # Read without text
+            reader = ShardReader(str(shard_path))
+            docs = list(reader.scan(load_text=False))
 
-        assert len(docs) == 1
-        assert docs[0]["text"] is None
-        assert docs[0]["doc_id"] == "test"
+            assert len(docs) == 1
+            assert docs[0]["doc_id"] == "doc1"
+            assert docs[0]["text"] is None
+            assert docs[0]["token_ids"] is not None
 
-    def test_empty_metadata(self, temp_shard):
-        """Test document with no metadata."""
-        writer = ShardWriter(temp_shard)
-        writer.append(
-            doc_id="minimal",
-            text="Minimal doc",
-            metadata={},
-            token_ids=np.array([1], dtype=np.uint32),
-            weights=np.array([1.0], dtype=np.float32),
-        )
-        writer.close()
+    def test_sparse_vectors(self):
+        """Test with realistic sparse vectors."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
 
-        reader = ShardReader(temp_shard)
-        docs = list(reader.scan())
+            # Create sparse vector (many zero weights filtered out)
+            writer = ShardWriter(str(shard_path))
+            writer.append(
+                doc_id="doc1",
+                text="Sparse document",
+                metadata={},
+                token_ids=np.array([10, 50, 100, 500, 1000], dtype=np.uint32),
+                weights=np.array([0.9, 0.7, 0.5, 0.3, 0.1], dtype=np.float32),
+            )
+            writer.close()
 
-        assert docs[0]["metadata"] == {}
+            reader = ShardReader(str(shard_path))
+            docs = list(reader.scan())
 
-    def test_large_sparse_vector(self, temp_shard):
-        """Test with realistic SPLADE vector size."""
-        writer = ShardWriter(temp_shard)
+            assert len(docs) == 1
+            np.testing.assert_array_equal(docs[0]["token_ids"], [10, 50, 100, 500, 1000])
+            np.testing.assert_array_almost_equal(docs[0]["weights"], [0.9, 0.7, 0.5, 0.3, 0.1])
 
-        # Realistic SPLADE: ~200 non-zero dimensions
-        n_tokens = 200
-        token_ids = np.array(
-            sorted(np.random.choice(30000, n_tokens, replace=False)), dtype=np.uint32
-        )
-        weights = np.random.rand(n_tokens).astype(np.float32)
+    def test_metadata_types(self):
+        """Test that metadata values are converted to strings."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
 
-        writer.append(
-            doc_id="large_vec",
-            text="Document with large sparse vector",
-            metadata={"size": str(n_tokens)},
-            token_ids=token_ids,
-            weights=weights,
-        )
-        writer.close()
+            writer = ShardWriter(str(shard_path))
+            writer.append(
+                doc_id="doc1",
+                text="Test",
+                metadata={
+                    "string": "value",
+                    "int": 42,
+                    "float": 3.14,
+                    "bool": True,
+                },
+                token_ids=np.array([1], dtype=np.uint32),
+                weights=np.array([0.5], dtype=np.float32),
+            )
+            writer.close()
 
-        reader = ShardReader(temp_shard)
-        docs = list(reader.scan())
+            reader = ShardReader(str(shard_path))
+            docs = list(reader.scan())
 
-        assert len(docs) == 1
-        np.testing.assert_array_equal(docs[0]["token_ids"], token_ids)
-        np.testing.assert_array_almost_equal(docs[0]["weights"], weights)
+            # All should be strings
+            assert docs[0]["metadata"]["string"] == "value"
+            assert docs[0]["metadata"]["int"] == "42"
+            assert docs[0]["metadata"]["float"] == "3.14"
+            assert docs[0]["metadata"]["bool"] == "True"
 
-    def test_shard_size_tracking(self, temp_shard):
-        """Test that shard size is tracked correctly."""
-        writer = ShardWriter(temp_shard)
+    def test_invalid_write_batch_size_zero(self):
+        """write_batch_size=0 should raise ValueError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
+            with pytest.raises(ValueError, match="write_batch_size must be positive"):
+                ShardWriter(str(shard_path), write_batch_size=0)
 
-        initial_size = writer.size()
-        assert initial_size == 0
-
-        writer.append(
-            doc_id="test",
-            text="test",
-            metadata={},
-            token_ids=np.array([1], dtype=np.uint32),
-            weights=np.array([1.0], dtype=np.float32),
-        )
-
-        after_size = writer.size()
-        assert after_size > 0
-
-        writer.close()
-
-        # File size should match tracked size
-        actual_size = Path(temp_shard).stat().st_size
-        assert actual_size == after_size
+    def test_invalid_write_batch_size_negative(self):
+        """Negative write_batch_size should raise ValueError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shard_path = Path(tmpdir) / "test.fb"
+            with pytest.raises(ValueError, match="write_batch_size must be positive"):
+                ShardWriter(str(shard_path), write_batch_size=-1)

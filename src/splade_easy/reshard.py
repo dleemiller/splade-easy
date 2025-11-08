@@ -56,7 +56,7 @@ class IndexResharder:
             raise ValueError("No shards found")
 
         logger.info(f"Resharding {len(self.old_shards)} shards")
-        logger.info(f"Target size: {self.target_size_bytes / (1024*1024):.0f} MB")
+        logger.info(f"Target size: {self.target_size_bytes / (1024 * 1024):.0f} MB")
 
         # Ensure no stale temp shards from a previous interrupted run
         if self.temp_dir.exists():

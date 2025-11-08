@@ -13,7 +13,7 @@ SPLADE-Easy provides a simple interface for creating and querying sparse lexical
 ## Installation
 
 ```bash
-pip install splade-easy
+uv sync
 ```
 
 Requires **Python 3.11+**.

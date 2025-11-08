@@ -94,7 +94,7 @@ class ShardWriter:
         self.write_buffer.clear()
 
     def size(self) -> int:
-        """Current shard size in bytes."""
+        """Current shard size in bytes, including buffered writes."""
         return self._size
 
     def close(self) -> None:

@@ -43,6 +43,8 @@ class TestSpladeRetriever:
             ]
 
             index.add_batch(docs)
+            # Finalize shard to make docs available to retriever
+            index._finalize_current_shard()
             yield tmpdir
 
     def test_basic_search_disk_mode(self, populated_index):

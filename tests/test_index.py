@@ -274,3 +274,110 @@ class TestSpladeIndex:
         # Ensure no temp shard files remain after rotation
         temp_files = list(Path(temp_index_dir).glob("_temp_shard_*.fb"))
         assert temp_files == []
+
+    def test_add_batch_does_not_finalize_shard(self, temp_index_dir):
+        """Regression: add_batch should not immediately finalize shard (Bug 1)."""
+        index = SpladeIndex(temp_index_dir, shard_size_mb=32)
+
+        # Add a batch of 100 docs
+        docs = [
+            Document(
+                doc_id=f"doc_{i}",
+                text=f"Document {i}",
+                metadata={},
+                token_ids=np.array([i], dtype=np.uint32),
+                weights=np.array([0.5], dtype=np.float32),
+            )
+            for i in range(100)
+        ]
+        index.add_batch(docs)
+
+        # Should still have current_writer open (shard not finalized)
+        assert index.current_writer is not None, "Shard should still be open after add_batch"
+
+        # Should have 0 finalized shards (all docs still in buffer)
+        assert index.metadata["num_shards"] == 0, "Should not have finalized any shards yet"
+
+    def test_shards_reach_target_size(self, temp_index_dir):
+        """Regression: shards should grow to ~32MB, not ~350KB per batch (Bug 1)."""
+        target_size_mb = 1  # Use 1MB for faster test
+        index = SpladeIndex(temp_index_dir, shard_size_mb=target_size_mb)
+
+        # Add documents in batches until we get a rotated shard
+        batch_size = 100
+        for batch_num in range(100):  # Add up to 10,000 docs
+            docs = [
+                Document(
+                    doc_id=f"doc_{batch_num}_{i}",
+                    text=f"Document {batch_num}_{i} " * 50,  # Make docs larger
+                    metadata={},
+                    token_ids=np.random.randint(0, 1000, 30, dtype=np.uint32),
+                    weights=np.random.rand(30).astype(np.float32),
+                )
+                for i in range(batch_size)
+            ]
+            index.add_batch(docs)
+
+            # Check if we've rotated a shard
+            if index.metadata["num_shards"] > 0:
+                break
+
+        # We should have rotated at least one shard
+        assert index.metadata["num_shards"] > 0, "Should have created at least one shard"
+
+        # Finalize current shard to check its size
+        index._finalize_current_shard()
+
+        # Get shard sizes
+        shard_paths = index._get_shard_paths()
+        assert len(shard_paths) > 0, "Should have at least one shard"
+
+        # Check that shards are reasonably close to target size
+        # They should be close to 1MB, definitely not ~350KB
+        for shard_path in shard_paths[:-1]:  # Check all but last (may be partial)
+            size_mb = shard_path.stat().st_size / (1024 * 1024)
+            # Allow 50% tolerance (0.5MB to 1.5MB for 1MB target)
+            assert (
+                size_mb >= target_size_mb * 0.5
+            ), f"Shard {shard_path.name} is {size_mb:.2f}MB, should be ~{target_size_mb}MB"
+
+    def test_reshard_updates_metadata(self, temp_index_dir):
+        """Regression: reshard must update metadata.json (Bug 2)."""
+        index = SpladeIndex(temp_index_dir, shard_size_mb=0.01)
+
+        # Add documents to create multiple small shards
+        for i in range(100):
+            doc = Document(
+                doc_id=f"doc_{i}",
+                text=f"Document {i} " * 20,
+                metadata={},
+                token_ids=np.random.randint(0, 1000, 10, dtype=np.uint32),
+                weights=np.random.rand(10).astype(np.float32),
+            )
+            index.add(doc)
+
+        initial_num_shards = index.metadata["num_shards"]
+        assert initial_num_shards > 1, "Should have multiple shards before reshard"
+
+        # Reshard to larger size
+        new_target_size = 1
+        stats = index.reshard(target_shard_size_mb=new_target_size)
+
+        # Verify metadata was updated
+        assert index.metadata["num_docs"] == 100, "Doc count should be preserved"
+        assert (
+            index.metadata["num_shards"] == stats["new_shards"]
+        ), "num_shards should match reshard result"
+        assert (
+            len(index.metadata["shard_hashes"]) == stats["new_shards"]
+        ), "shard_hashes length should match num_shards"
+
+        # Bug 2 specific: verify shard_size_mb was updated
+        assert (
+            index.metadata["shard_size_mb"] == new_target_size
+        ), f"shard_size_mb should be updated to {new_target_size}"
+
+        # Verify all shards exist
+        for shard_hash in index.metadata["shard_hashes"]:
+            shard_path = index.index_dir / f"{shard_hash}.fb"
+            assert shard_path.exists(), f"Shard {shard_hash} should exist on disk"

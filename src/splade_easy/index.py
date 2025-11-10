@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Optional
@@ -5,6 +6,7 @@ from typing import Optional
 from .manifest import Manifest
 from .shard import ShardReader
 
+logger = logging.getLogger(__name__)
 
 class Index:
     def __init__(self, root: str | Path, *, memory: bool = False):
@@ -13,20 +15,40 @@ class Index:
         self.manifest = Manifest.load(self.root)
         self.memory = memory
         self._cache: dict[Path, list[dict]] = dict()
-        self._open = False
+        self._opened = False
+        logger.info(f"Created Index: root={self.root}, memory={self.memory}")
 
-    # Lifecycle
-    def open(self):
-        if self._open:
+    def load(self):
+        """Load index into memory (for memory mode)"""
+        logger.info(f"load() called: memory={self.memory}, opened={self._opened}")
+        if not self.memory:
+            logger.info("Not memory mode, skipping load")
             return self
+        if not self._opened:
+            logger.info("Not opened, calling open()")
+            self.open()
+        else:
+            logger.info("Already opened")
+        return self
+
+    def open(self):
+        """Open index for operations"""
+        logger.info(f"open() called: opened={self._opened}")
+        if self._opened:
+            logger.info("Already opened, returning")
+            return self
+
+        self._opened = True
         if self.memory:
+            logger.info("Memory mode, calling _load_cache()")
             self._load_cache()
-        self._open = True
+        else:
+            logger.info("Disk mode, not loading cache")
         return self
 
     def close(self):
         self._cache.clear()
-        self._open = False
+        self._opened = False
 
     def __enter__(self):
         return self.open()
@@ -59,11 +81,14 @@ class Index:
     # Manifest/visibility
     def refresh(self) -> None:
         """Refresh manifest and cache if needed"""
+        logger.info("refresh() called")
         new_manifest = Manifest.load(self.root)
         changed = new_manifest.commit_id != self.manifest.commit_id
+        logger.info(f"Manifest changed: {changed}")
         if changed:
             self.manifest = new_manifest
             if self.memory:
+                logger.info("Memory mode, reloading cache")
                 self._load_cache()
 
     # Read helpers - delegate to shards
@@ -105,10 +130,19 @@ class Index:
     # Internal helpers
     def _load_cache(self):
         """Load all shards into memory cache"""
+        logger.info("_load_cache() called")
         self._cache.clear()
-        for shard_path in self.iter_shards():
+        shards = self.iter_shards()
+        logger.info(f"Found {len(shards)} shards to load: {shards}")
+        
+        for shard_path in shards:
+            logger.info(f"Loading shard: {shard_path}")
             reader = ShardReader(str(shard_path))
-            self._cache[shard_path] = list(reader.scan(load_text=True))
+            docs = list(reader.scan(load_text=True))
+            self._cache[shard_path] = docs
+            logger.info(f"Loaded {len(docs)} docs from {shard_path}")
+        
+        logger.info(f"Cache loading complete: {len(self._cache)} shards, {sum(len(docs) for docs in self._cache.values())} total docs")
 
     def _load_deleted_ids(self) -> set[str]:
         """Load deleted document IDs"""

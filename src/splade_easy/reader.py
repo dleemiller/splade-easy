@@ -1,4 +1,5 @@
 import heapq
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Optional
 
@@ -20,25 +21,14 @@ class SearchResult:
 class IndexReader:
     def __init__(self, index: Index):
         self.index = index
-        self._opened = False
-
-    # Lifecycle
-    def open(self):
-        """Open reader for operations"""
-        self._opened = True
+        # Auto-load if memory mode
         if self.index.memory:
-            self.index.open()  # Ensure index is loaded
+            self.index.load()
+    
+    def load(self):
+        """Load index into memory (optional, auto-called for memory mode)"""
+        self.index.open()
         return self
-
-    def close(self):
-        """Close reader"""
-        self._opened = False
-
-    def __enter__(self):
-        return self.open()
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
 
     # Search API - unified method
     def search(
@@ -51,19 +41,18 @@ class IndexReader:
         return_text: bool = False,
     ) -> list[SearchResult]:
         """Unified search method - handles both text and vector queries"""
-        if not self._opened:
-            raise ValueError("Reader not opened. Use reader.open() or context manager.")
-
         # Handle text query
         if query is not None:
             if model is None:
                 raise ValueError("Model required for text search")
-            
+
             # Model validation
             index_model_id = self.index.manifest.model_id
             query_model_id = extract_model_id(model)
             if query_model_id != "unknown" and index_model_id != query_model_id:
-                raise ValueError(f"Model mismatch! Index: {index_model_id}, Query: {query_model_id}")
+                raise ValueError(
+                    f"Model mismatch! Index: {index_model_id}, Query: {query_model_id}"
+                )
 
             # Encode query
             encoding = model.encode(query)
@@ -94,17 +83,17 @@ class IndexReader:
                     query_tokens=query_tokens,
                     query_weights=query_weights,
                 )
-                
+
                 if score <= 0:
                     continue
-                    
+
                 result = SearchResult(
                     doc_id=doc["doc_id"],
                     score=score,
                     metadata=doc["metadata"],
                     text=doc.get("text"),
                 )
-                
+
                 if len(heap) < top_k:
                     heapq.heappush(heap, (score, idx, result))
                 elif score > heap[0][0]:
@@ -116,27 +105,21 @@ class IndexReader:
     # Convenience methods for specific search types
     def search_text(self, query: str, model, top_k=10, return_text=False):
         """Search using text query"""
-        return self.search(
-            query=query,
-            model=model,
-            top_k=top_k,
-            return_text=return_text
-        )
+        return self.search(query=query, model=model, top_k=top_k, return_text=return_text)
 
-    def search_vectors(self, query_tokens: np.ndarray, query_weights: np.ndarray, top_k=10, return_text=False):
+    def search_vectors(
+        self, query_tokens: np.ndarray, query_weights: np.ndarray, top_k=10, return_text=False
+    ):
         """Search using pre-encoded SPLADE vectors"""
         return self.search(
             query_tokens=query_tokens,
             query_weights=query_weights,
             top_k=top_k,
-            return_text=return_text
+            return_text=return_text,
         )
 
     def get(self, doc_id: str) -> Optional[dict]:
         """Get document by ID"""
-        if not self._opened:
-            raise ValueError("Reader not opened. Use reader.open() or context manager.")
-        
         if self._is_deleted(doc_id):
             return None
         return self.index.get(doc_id)

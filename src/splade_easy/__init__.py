@@ -1,6 +1,7 @@
 # src/splade_easy/__init__.py
 
-from .index import Document, SpladeIndex
+from .document import Document
+from .index import Index
 from .retriever import SearchResult
 from .utils import extract_splade_vectors
 

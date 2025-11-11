@@ -1,0 +1,13 @@
+{
+  "version": "0.1.0",
+  "model_id": "unknown",
+  "shard_hashes": [
+    "66fd18e212caf329f5320c1a21b2db2ef53ec712871d37f7b1c0874903daa045",
+    "38748d91fd5de07821bb00e9457138ac6fdf567668cce7d4c0abbb4da5be0e69"
+  ],
+  "num_docs": 15000,
+  "shard_size_mb": 32.0,
+  "commit_id": "9322e9dc-ac65-423d-8b50-48761bcc5559",
+  "created_at": "2025-11-11T21:25:45.580613",
+  "updated_at": "2025-11-11T21:25:45.580620"
+}

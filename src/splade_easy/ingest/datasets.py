@@ -8,7 +8,7 @@ from rich.logging import RichHandler
 from rich.progress import track
 from sentence_transformers import SentenceTransformer
 
-from splade_easy.index import SpladeIndex
+from splade_easy import Index
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,29 +62,22 @@ class DatasetIngest:
 
         if resume and Path(self.index_dir).exists():
             logger.info("Resuming existing index")
-            index = SpladeIndex(self.index_dir, shard_size_mb=self.shard_size_mb)
+            index = Index(self.index_dir)
         else:
             logger.info("Creating new index")
-            index = SpladeIndex(self.index_dir, shard_size_mb=self.shard_size_mb)
+            index = Index(self.index_dir)
 
-        doc_ids, texts, metadatas = [], [], []
+        with index.writer(shard_size_mb=self.shard_size_mb) as writer:
+            writer.set_model(self.model)
+            
+            for i, row in track(enumerate(ds), total=len(ds), description="Ingesting"):
+                doc_id = self._make_doc_id(row, i)
+                text = self._make_text(row)
+                metadata = self._make_metadata(row)
+                
+                writer.insert(doc_id=doc_id, text=text, metadata=metadata)
 
-        for i, row in track(enumerate(ds), total=len(ds), description="Ingesting"):
-            doc_ids.append(self._make_doc_id(row, i))
-            texts.append(self._make_text(row))
-            metadatas.append(self._make_metadata(row))
-
-            if len(doc_ids) >= batch_size:
-                index.add_texts(doc_ids, texts, metadatas, self.model)
-                doc_ids, texts, metadatas = [], [], []
-
-        if doc_ids:
-            index.add_texts(doc_ids, texts, metadatas, self.model)
-
-        # Finalize any remaining shard
-        index._finalize_current_shard()
-
-        stats = index.stats()
+        stats = index.stats
         logger.info(
             f"Complete: {stats['num_docs']} docs, {stats['num_shards']} shards, {stats['total_size_mb']:.2f}MB"
         )

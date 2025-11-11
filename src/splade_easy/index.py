@@ -1,12 +1,28 @@
+from dataclasses import dataclass
+
+import numpy as np
+
+
+@dataclass
+class Document:
+    doc_id: str
+    text: str | bytes
+    metadata: dict[str, str]
+    token_ids: np.ndarray
+    weights: np.ndarray
+
+
 import logging
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Optional
 
+from .inverted_index import InvertedIndexReader
 from .manifest import Manifest
 from .shard import ShardReader
 
 logger = logging.getLogger(__name__)
+
 
 class Index:
     def __init__(self, root: str | Path, *, memory: bool = False):
@@ -15,39 +31,37 @@ class Index:
         self.manifest = Manifest.load(self.root)
         self.memory = memory
         self._cache: dict[Path, list[dict]] = dict()
+        self._inv_index_cache: dict[Path, InvertedIndexReader] = (
+            dict()
+        )  # NEW: Cache inverted indices
         self._opened = False
-        logger.info(f"Created Index: root={self.root}, memory={self.memory}")
+        self._pos_index: dict[str, tuple[Path, int, int]] = {}
+        self._doc_id_to_idx: dict[str, int] = {}
+        self._idx_to_doc_id: list[str] = []
+        logger.debug(f"Created Index: root={self.root}, memory={self.memory}")
 
     def load(self):
-        """Load index into memory (for memory mode)"""
-        logger.info(f"load() called: memory={self.memory}, opened={self._opened}")
+        logger.debug(f"load() called: memory={self.memory}, opened={self._opened}")
         if not self.memory:
-            logger.info("Not memory mode, skipping load")
             return self
         if not self._opened:
-            logger.info("Not opened, calling open()")
             self.open()
-        else:
-            logger.info("Already opened")
         return self
 
     def open(self):
-        """Open index for operations"""
-        logger.info(f"open() called: opened={self._opened}")
         if self._opened:
-            logger.info("Already opened, returning")
             return self
-
         self._opened = True
         if self.memory:
-            logger.info("Memory mode, calling _load_cache()")
             self._load_cache()
-        else:
-            logger.info("Disk mode, not loading cache")
         return self
 
     def close(self):
         self._cache.clear()
+        # NEW: Close inverted index cache
+        for inv_reader in self._inv_index_cache.values():
+            inv_reader.close()
+        self._inv_index_cache.clear()
         self._opened = False
 
     def __enter__(self):
@@ -56,42 +70,34 @@ class Index:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    # Properties and stats
     def __len__(self) -> int:
         return self.manifest.num_docs
 
     @property
     def stats(self) -> dict:
-        """Get index statistics"""
         deleted_ids = self._load_deleted_ids()
         total_size = sum(p.stat().st_size for p in self.iter_shards())
 
         return {
             "num_docs": len(self),
             "num_shards": len(self.iter_shards()),
+            "num_cached_inverted_indices": len(self._inv_index_cache),  # NEW
             "deleted_docs": len(deleted_ids),
             "total_size_mb": total_size / (1024 * 1024),
             "model_id": self.manifest.model_id,
         }
 
     def get_model(self) -> Optional[str]:
-        """Returns the model_id for the index."""
         return self.manifest.model_id
 
-    # Manifest/visibility
     def refresh(self) -> None:
-        """Refresh manifest and cache if needed"""
-        logger.info("refresh() called")
         new_manifest = Manifest.load(self.root)
         changed = new_manifest.commit_id != self.manifest.commit_id
-        logger.info(f"Manifest changed: {changed}")
         if changed:
             self.manifest = new_manifest
             if self.memory:
-                logger.info("Memory mode, reloading cache")
                 self._load_cache()
 
-    # Read helpers - delegate to shards
     def iter_shards(self) -> list[Path]:
         return self.manifest.shard_paths(self.root)
 
@@ -103,49 +109,74 @@ class Index:
             yield from reader.scan(load_text=load_text)
 
     def get(self, doc_id: str) -> Optional[dict]:
-        """Get document by ID"""
         deleted_ids = self._load_deleted_ids()
         if doc_id in deleted_ids:
             return None
 
+        # If in memory mode, search cache first
+        if self.memory and self._cache:
+            for docs in self._cache.values():
+                for doc in docs:
+                    if doc["doc_id"] == doc_id:
+                        return doc
+
+        # Fallback to disk search
         for shard_path in self.iter_shards():
             for doc in self.iter_docs(shard_path, load_text=True):
                 if doc["doc_id"] == doc_id:
                     return doc
         return None
 
-    # Factory methods for reader/writer
-    def reader(self):
-        """Create an IndexReader for this index"""
+    def reader(self, *, memory: bool = None):
         from .reader import IndexReader
 
-        return IndexReader(self)
+        # If memory mode is explicitly requested or index is already in memory mode
+        if memory is True or (memory is None and self.memory):
+            # Ensure we're loaded into memory
+            if not self._opened:
+                self.load()
+        return IndexReader(self, memory_mode=memory)
 
     def writer(self, shard_size_mb: float = 32.0):
-        """Create an IndexWriter for this index"""
         from .writer import IndexWriter
 
         return IndexWriter(self, shard_size_mb=shard_size_mb)
 
-    # Internal helpers
     def _load_cache(self):
-        """Load all shards into memory cache"""
-        logger.info("_load_cache() called")
+        logger.debug("_load_cache() called")
         self._cache.clear()
-        shards = self.iter_shards()
-        logger.info(f"Found {len(shards)} shards to load: {shards}")
-        
-        for shard_path in shards:
-            logger.info(f"Loading shard: {shard_path}")
+        self._pos_index.clear()
+        self._inv_index_cache.clear()
+        self._offset_to_doc_id: Dict[tuple[str, int], str] = {}  # NEW
+        self._doc_id_to_idx.clear()
+        self._idx_to_doc_id.clear()
+
+        # First pass: collect all doc_ids to create a stable mapping
+        all_doc_ids = []
+        for shard_path in self.iter_shards():
             reader = ShardReader(str(shard_path))
-            docs = list(reader.scan(load_text=True))
-            self._cache[shard_path] = docs
-            logger.info(f"Loaded {len(docs)} docs from {shard_path}")
+            for rec in reader.scan(load_text=False, want_positions=False, light=True):
+                all_doc_ids.append(rec["doc_id"])
         
-        logger.info(f"Cache loading complete: {len(self._cache)} shards, {sum(len(docs) for docs in self._cache.values())} total docs")
+        self._idx_to_doc_id = sorted(list(set(all_doc_ids)))
+        self._doc_id_to_idx = {doc_id: i for i, doc_id in enumerate(self._idx_to_doc_id)}
+
+        for shard_path in self.iter_shards():
+            reader = ShardReader(str(shard_path))
+            docs = []
+            for rec in reader.scan(load_text=False, want_positions=True, light=False):
+                docs.append(rec)
+                did = rec["doc_id"]
+                off, mlen = rec["_pos"]
+                self._pos_index[did] = (shard_path, off, mlen)
+                self._offset_to_doc_id[(str(shard_path), off)] = did
+            self._cache[shard_path] = docs
+            
+            inv_path = shard_path.with_suffix('.inv')
+            if inv_path.exists():
+                self._inv_index_cache[shard_path] = InvertedIndexReader(str(inv_path), shard_path)
 
     def _load_deleted_ids(self) -> set[str]:
-        """Load deleted document IDs"""
         deleted_path = self.root / "deleted_ids.txt"
         if deleted_path.exists():
             with open(deleted_path) as f:

@@ -4,12 +4,10 @@
 
 import flatbuffers
 from flatbuffers.compat import import_numpy
-
 np = import_numpy()
 
-
-class Document:
-    __slots__ = ["_tab"]
+class Document(object):
+    __slots__ = ['_tab']
 
     @classmethod
     def GetRootAs(cls, buf, offset=0):
@@ -22,7 +20,6 @@ class Document:
     def GetRootAsDocument(cls, buf, offset=0):
         """This method is deprecated. Please switch to GetRootAs."""
         return cls.GetRootAs(buf, offset)
-
     # Document
     def Init(self, buf, pos):
         self._tab = flatbuffers.table.Table(buf, pos)
@@ -35,11 +32,31 @@ class Document:
         return None
 
     # Document
-    def Text(self):
+    def Text(self, j):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         if o != 0:
-            return self._tab.String(o + self._tab.Pos)
-        return None
+            a = self._tab.Vector(o)
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 1))
+        return 0
+
+    # Document
+    def TextAsNumpy(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
+        if o != 0:
+            return self._tab.GetVectorAsNumpy(flatbuffers.number_types.Uint8Flags, o)
+        return 0
+
+    # Document
+    def TextLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # Document
+    def TextIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
+        return o == 0
 
     # Document
     def Metadata(self, j):
@@ -49,7 +66,6 @@ class Document:
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
             x = self._tab.Indirect(x)
             from .KeyValue import KeyValue
-
             obj = KeyValue()
             obj.Init(self._tab.Bytes, x)
             return obj
@@ -72,10 +88,7 @@ class Document:
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             a = self._tab.Vector(o)
-            return self._tab.Get(
-                flatbuffers.number_types.Uint32Flags,
-                a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 4),
-            )
+            return self._tab.Get(flatbuffers.number_types.Uint32Flags, a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 4))
         return 0
 
     # Document
@@ -102,10 +115,7 @@ class Document:
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             a = self._tab.Vector(o)
-            return self._tab.Get(
-                flatbuffers.number_types.Float32Flags,
-                a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 4),
-            )
+            return self._tab.Get(flatbuffers.number_types.Float32Flags, a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 4))
         return 0
 
     # Document
@@ -127,88 +137,36 @@ class Document:
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         return o == 0
 
-
-def DocumentStart(builder):
-    builder.StartObject(5)
-
-
+def DocumentStart(builder): builder.StartObject(5)
 def Start(builder):
     return DocumentStart(builder)
-
-
-def DocumentAddDocId(builder, docId):
-    builder.PrependUOffsetTRelativeSlot(0, flatbuffers.number_types.UOffsetTFlags.py_type(docId), 0)
-
-
+def DocumentAddDocId(builder, docId): builder.PrependUOffsetTRelativeSlot(0, flatbuffers.number_types.UOffsetTFlags.py_type(docId), 0)
 def AddDocId(builder, docId):
     return DocumentAddDocId(builder, docId)
-
-
-def DocumentAddText(builder, text):
-    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(text), 0)
-
-
+def DocumentAddText(builder, text): builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(text), 0)
 def AddText(builder, text):
     return DocumentAddText(builder, text)
-
-
-def DocumentAddMetadata(builder, metadata):
-    builder.PrependUOffsetTRelativeSlot(
-        2, flatbuffers.number_types.UOffsetTFlags.py_type(metadata), 0
-    )
-
-
+def DocumentStartTextVector(builder, numElems): return builder.StartVector(1, numElems, 1)
+def StartTextVector(builder, numElems):
+    return DocumentStartTextVector(builder, numElems)
+def DocumentAddMetadata(builder, metadata): builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(metadata), 0)
 def AddMetadata(builder, metadata):
     return DocumentAddMetadata(builder, metadata)
-
-
-def DocumentStartMetadataVector(builder, numElems):
-    return builder.StartVector(4, numElems, 4)
-
-
+def DocumentStartMetadataVector(builder, numElems): return builder.StartVector(4, numElems, 4)
 def StartMetadataVector(builder, numElems):
     return DocumentStartMetadataVector(builder, numElems)
-
-
-def DocumentAddTokenIds(builder, tokenIds):
-    builder.PrependUOffsetTRelativeSlot(
-        3, flatbuffers.number_types.UOffsetTFlags.py_type(tokenIds), 0
-    )
-
-
+def DocumentAddTokenIds(builder, tokenIds): builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(tokenIds), 0)
 def AddTokenIds(builder, tokenIds):
     return DocumentAddTokenIds(builder, tokenIds)
-
-
-def DocumentStartTokenIdsVector(builder, numElems):
-    return builder.StartVector(4, numElems, 4)
-
-
+def DocumentStartTokenIdsVector(builder, numElems): return builder.StartVector(4, numElems, 4)
 def StartTokenIdsVector(builder, numElems):
     return DocumentStartTokenIdsVector(builder, numElems)
-
-
-def DocumentAddWeights(builder, weights):
-    builder.PrependUOffsetTRelativeSlot(
-        4, flatbuffers.number_types.UOffsetTFlags.py_type(weights), 0
-    )
-
-
+def DocumentAddWeights(builder, weights): builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(weights), 0)
 def AddWeights(builder, weights):
     return DocumentAddWeights(builder, weights)
-
-
-def DocumentStartWeightsVector(builder, numElems):
-    return builder.StartVector(4, numElems, 4)
-
-
+def DocumentStartWeightsVector(builder, numElems): return builder.StartVector(4, numElems, 4)
 def StartWeightsVector(builder, numElems):
     return DocumentStartWeightsVector(builder, numElems)
-
-
-def DocumentEnd(builder):
-    return builder.EndObject()
-
-
+def DocumentEnd(builder): return builder.EndObject()
 def End(builder):
     return DocumentEnd(builder)

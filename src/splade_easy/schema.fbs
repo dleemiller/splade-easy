@@ -1,5 +1,4 @@
 // src/splade_easy/schema.fbs
-
 namespace SpladeEasy;
 
 table KeyValue {
@@ -9,7 +8,7 @@ table KeyValue {
 
 table Document {
   doc_id: string (required);
-  text: string (required);
+  text: [ubyte];
   metadata: [KeyValue];
   token_ids: [uint] (required);
   weights: [float] (required);

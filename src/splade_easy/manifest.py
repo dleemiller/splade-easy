@@ -1,3 +1,4 @@
+# manifest.py
 import json
 import os
 import uuid

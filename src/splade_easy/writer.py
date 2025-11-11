@@ -9,13 +9,10 @@ from uuid import uuid4
 import numpy as np
 
 from .index import Index
+from .inverted_index import InvertedIndexWriter
 from .scoring import ensure_sorted_splade_vector
 from .shard import ShardReader, ShardWriter
-from .utils import (
-    extract_model_id,
-    extract_splade_vectors,
-    hash_file,
-)
+from .utils import extract_model_id, extract_splade_vectors, hash_file
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +27,7 @@ class IndexWriter:
         self._temp_path: Optional[Path] = None
         self._model = None
 
-    # Lifecycle
-    def open(self) -> IndexWriter:
+    def open(self) -> "IndexWriter":
         if self._opened:
             return self
         self._opened = True
@@ -50,30 +46,26 @@ class IndexWriter:
         self.close()
 
     def set_model(self, model) -> None:
-        """Set model and update manifest"""
         self._model = model
         manifest = self.index.manifest
         manifest.model_id = extract_model_id(model)
         manifest.save(self.index.root)
         self.index.refresh()
 
-    # Write operations
     def insert(
         self,
         doc_id: str,
-        text: str,
+        text: str | bytes,
         metadata: dict | None = None,
         token_ids: np.ndarray | None = None,
         weights: np.ndarray | None = None,
     ):
-        """Insert a single document"""
         if not self._opened:
             raise ValueError("Writer not opened")
 
         if metadata is None:
             metadata = {}
 
-        # Handle encoding
         if token_ids is None and weights is None:
             model = self._get_model()
             encoding = model.encode(text, show_progress_bar=False)
@@ -81,21 +73,15 @@ class IndexWriter:
 
         token_ids, weights = ensure_sorted_splade_vector(token_ids, weights, deduplicate=True)
 
-        # Write to shard
         shard = self._begin_shard()
-        shard.append(
-            doc_id=doc_id, text=text, metadata=metadata, token_ids=token_ids, weights=weights
-        )
+        shard.append(doc_id=doc_id, text=text, metadata=metadata, token_ids=token_ids, weights=weights)
 
-        # Update manifest
         self.index.manifest.num_docs += 1
 
-        # Auto-rotate if full
         if shard.size() >= self.shard_size_bytes:
             self._finalize_shard()
 
     def insert_batch(self, documents: List[Dict[str, Any]]):
-        """Insert multiple documents"""
         for doc in documents:
             self.insert(
                 doc_id=doc["doc_id"],
@@ -105,26 +91,19 @@ class IndexWriter:
                 weights=doc.get("weights"),
             )
 
-    def commit(self):
-        """Commit pending changes"""
-        if self._writer:
-            self._writer._flush()
-            self._writer.f.flush()
-            os.fsync(self._writer.f.fileno())
+    def commit(self) -> None:
+        """Finalize any open shard and update manifest."""
+        if self._writer is not None:
+            self._finalize_shard()
         self.index.manifest.save(self.index.root)
-        self.index.refresh()
 
-    # Maintenance operations
     def delete(self, doc_id: str) -> bool:
-        """Mark document as deleted"""
         if not self._opened:
             raise ValueError("Writer not opened")
 
-        # Check if doc exists
         if self.index.get(doc_id) is None:
             return False
 
-        # Add to deleted IDs
         deleted_path = self.index.root / "deleted_ids.txt"
         deleted_ids = self.index._load_deleted_ids()
         deleted_ids.add(doc_id)
@@ -133,28 +112,21 @@ class IndexWriter:
             for doc_id_del in sorted(deleted_ids):
                 f.write(f"{doc_id_del}\n")
 
-        # Update manifest
         self.index.manifest.num_docs -= 1
         self.index.manifest.save(self.index.root)
         self.index.refresh()
-
         logger.info(f"Deleted {doc_id}")
         return True
 
     def compact(self) -> None:
-        """Remove deleted documents by rebuilding shards"""
         if not self._opened:
             raise ValueError("Writer not opened")
 
         logger.info("Compacting index...")
-
-        # Finalize current shard
         self._finalize_shard()
 
-        # Collect non-deleted docs
         deleted_ids = self.index._load_deleted_ids()
         all_docs = []
-
         for shard_path in self.index.iter_shards():
             reader = ShardReader(str(shard_path))
             for doc in reader.scan(load_text=True):
@@ -169,91 +141,94 @@ class IndexWriter:
                         }
                     )
 
-        old_shards = len(self.index.iter_shards())
-
-        # Delete old shards
         for shard_path in self.index.iter_shards():
             shard_path.unlink()
+            # Also delete inverted index files
+            inv_path = shard_path.with_suffix('.inv')
+            if inv_path.exists():
+                inv_path.unlink()
 
-        # Reset manifest
         manifest = self.index.manifest
         manifest.shard_hashes = []
         manifest.num_docs = 0
         manifest.bump_commit()
 
-        # Re-add docs
         self.insert_batch(all_docs)
         self._finalize_shard()
 
-        # Clear deleted IDs
         deleted_path = self.index.root / "deleted_ids.txt"
         if deleted_path.exists():
             deleted_path.unlink()
 
-        logger.info(f"Compacted {old_shards} shards -> {len(self.index.iter_shards())} shards")
+        logger.info("Compaction complete")
 
     def reshard(self, target_shard_size_mb: int = 32, keep_originals: bool = False) -> dict:
-        """Reshard index with new target size"""
         if not self._opened:
             raise ValueError("Writer not opened")
-
         from .reshard import IndexResharder
-
-        # Finalize current shard
         self._finalize_shard()
-
-        # Perform resharding
-        with IndexResharder(
-            str(self.index.root), target_shard_size_mb, keep_originals
-        ) as resharder:
+        with IndexResharder(str(self.index.root), target_shard_size_mb, keep_originals) as resharder:
             stats = resharder.reshard()
-
-        # Reload index state
         self.index.refresh()
         return stats
 
-    # Internal helpers
     def _get_model(self):
-        """Get model for encoding"""
         if self._model is not None:
             return self._model
-
-        # Try loading from manifest
         model_id = self.index.manifest.model_id
         if model_id:
             try:
                 from sentence_transformers import SentenceTransformer
-
                 self._model = SentenceTransformer(model_id)
                 return self._model
             except Exception:
                 pass
-
         raise ValueError("No model available. Call set_model() or provide token_ids/weights")
 
     def _begin_shard(self) -> ShardWriter:
         if self._writer is None:
             self._temp_path = self.index.root / f"_temp_shard_{uuid4().hex}.fb"
             self._writer = ShardWriter(str(self._temp_path))
+            self._writer.enable_inverted_index()
         return self._writer
 
-    def _finalize_shard(self):
-        """Finalize current shard"""
-        if not self._writer:
+    def _finalize_shard(self) -> None:
+        """Finalize current shard if it exists."""
+        if self._writer is None:
             return
-
+        
+        # Close shard writer
         self._writer.close()
+        
+        # Check if temp file exists
+        if not self._temp_path.exists():
+            logger.warning(f"Temp shard file missing: {self._temp_path}")
+            self._writer = None
+            self._temp_path = None
+            return
+        
+        # Hash and rename temp shard to final location
         shard_hash = hash_file(self._temp_path)
         final_path = self.index.root / f"{shard_hash}.fb"
+        
+        # Atomic rename using os.replace
         os.replace(self._temp_path, final_path)
-
+        
+        # Write inverted index if available
+        inv_index = self._writer.get_inverted_index()
+        if inv_index is not None:
+            inv_path = final_path.with_suffix('.inv')
+            inv_writer = InvertedIndexWriter(str(inv_path))
+            inv_writer.write(inv_index)
+            inv_writer.close()
+            logger.debug(f"Written inverted index: {inv_path.name}")
+        
         # Update manifest
-        manifest = self.index.manifest
-        if shard_hash not in manifest.shard_hashes:
-            manifest.shard_hashes.append(shard_hash)
-        manifest.bump_commit()
-        manifest.save(self.index.root)
-
+        self.index.manifest.shard_hashes.append(shard_hash)
+        self.index.manifest.save(self.index.root)
+        
+        logger.debug(f"Finalized shard: {shard_hash[:16]}...")
+        
+        # Clean up
         self._writer = None
         self._temp_path = None
-        self.index.refresh()

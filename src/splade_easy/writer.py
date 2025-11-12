@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import uuid4
 
 import numpy as np
@@ -18,16 +18,34 @@ logger = logging.getLogger(__name__)
 
 
 class IndexWriter:
-    def __init__(self, index: Index, *, shard_size_mb: Optional[float] = None):
+    """
+    Writer for adding, modifying, and managing documents in a SPLADE index.
+
+    Handles document insertion, deletion, compaction, and resharding.
+    Automatically manages shard rotation and inverted index generation.
+
+    Args:
+        index: Index instance to write to
+        shard_size_mb: Target shard size in MB (default: 32MB)
+
+    Example:
+        >>> index = Index("my_index")
+        >>> with index.writer() as writer:
+        ...     writer.set_model(model)
+        ...     writer.insert(doc_id="1", text="Hello world", metadata={"source": "test"})
+        ...     writer.delete("old_doc")
+    """
+
+    def __init__(self, index: Index, *, shard_size_mb: float | None = None):
         self.index = index
         self.shard_size_mb = shard_size_mb or 32.0
         self.shard_size_bytes = int(self.shard_size_mb * 1024 * 1024)
         self._opened = False
-        self._writer: Optional[ShardWriter] = None
-        self._temp_path: Optional[Path] = None
+        self._writer: ShardWriter | None = None
+        self._temp_path: Path | None = None
         self._model = None
 
-    def open(self) -> "IndexWriter":
+    def open(self) -> IndexWriter:
         if self._opened:
             return self
         self._opened = True
@@ -46,6 +64,19 @@ class IndexWriter:
         self.close()
 
     def set_model(self, model) -> None:
+        """
+        Set the model for encoding documents.
+
+        Updates the manifest with the model ID and makes it available
+        for future insert operations.
+
+        Args:
+            model: SentenceTransformer model for encoding
+
+        Example:
+            >>> writer.set_model(model)
+            >>> writer.insert(doc_id="1", text="Hello")  # Will use model to encode
+        """
         self._model = model
         manifest = self.index.manifest
         manifest.model_id = extract_model_id(model)
@@ -60,6 +91,26 @@ class IndexWriter:
         token_ids: np.ndarray | None = None,
         weights: np.ndarray | None = None,
     ):
+        """
+        Insert a document into the index.
+
+        Args:
+            doc_id: Unique document identifier
+            text: Document text content
+            metadata: Optional metadata dictionary
+            token_ids: Pre-encoded SPLADE token IDs (optional, will encode if not provided)
+            weights: Pre-encoded SPLADE weights (optional, will encode if not provided)
+
+        Raises:
+            ValueError: If writer is not opened or no model is available for encoding
+
+        Example:
+            >>> writer.insert(
+            ...     doc_id="1",
+            ...     text="Machine learning paper",
+            ...     metadata={"year": "2024"}
+            ... )
+        """
         if not self._opened:
             raise ValueError("Writer not opened")
 
@@ -74,14 +125,29 @@ class IndexWriter:
         token_ids, weights = ensure_sorted_splade_vector(token_ids, weights, deduplicate=True)
 
         shard = self._begin_shard()
-        shard.append(doc_id=doc_id, text=text, metadata=metadata, token_ids=token_ids, weights=weights)
+        shard.append(
+            doc_id=doc_id, text=text, metadata=metadata, token_ids=token_ids, weights=weights
+        )
 
         self.index.manifest.num_docs += 1
 
         if shard.size() >= self.shard_size_bytes:
             self._finalize_shard()
 
-    def insert_batch(self, documents: List[Dict[str, Any]]):
+    def insert_batch(self, documents: list[dict[str, Any]]):
+        """
+        Insert multiple documents in batch.
+
+        Args:
+            documents: List of document dictionaries with keys: doc_id, text, metadata (optional),
+                      token_ids (optional), weights (optional)
+
+        Example:
+            >>> writer.insert_batch([
+            ...     {"doc_id": "1", "text": "Doc 1", "metadata": {"type": "A"}},
+            ...     {"doc_id": "2", "text": "Doc 2", "metadata": {"type": "B"}},
+            ... ])
+        """
         for doc in documents:
             self.insert(
                 doc_id=doc["doc_id"],
@@ -98,6 +164,25 @@ class IndexWriter:
         self.index.manifest.save(self.index.root)
 
     def delete(self, doc_id: str) -> bool:
+        """
+        Mark a document as deleted.
+
+        Adds the document ID to the deleted list without physically removing it.
+        Use compact() to physically remove deleted documents and reclaim space.
+
+        Args:
+            doc_id: Document identifier to delete
+
+        Returns:
+            True if document was deleted, False if not found
+
+        Raises:
+            ValueError: If writer is not opened
+
+        Example:
+            >>> writer.delete("obsolete_doc")
+            True
+        """
         if not self._opened:
             raise ValueError("Writer not opened")
 
@@ -113,12 +198,28 @@ class IndexWriter:
                 f.write(f"{doc_id_del}\n")
 
         self.index.manifest.num_docs -= 1
+        self.index.manifest.bump_commit()  # Document deletion - bump commit_id
         self.index.manifest.save(self.index.root)
         self.index.refresh()
         logger.info(f"Deleted {doc_id}")
         return True
 
     def compact(self) -> None:
+        """
+        Remove deleted documents and rebuild shards.
+
+        Physically removes all deleted documents by rebuilding the index
+        from scratch with only non-deleted documents. This reclaims disk space
+        and clears the deleted_ids.txt file.
+
+        Raises:
+            ValueError: If writer is not opened
+
+        Example:
+            >>> writer.delete("doc1")
+            >>> writer.delete("doc2")
+            >>> writer.compact()  # Physically remove doc1 and doc2
+        """
         if not self._opened:
             raise ValueError("Writer not opened")
 
@@ -144,7 +245,7 @@ class IndexWriter:
         for shard_path in self.index.iter_shards():
             shard_path.unlink()
             # Also delete inverted index files
-            inv_path = shard_path.with_suffix('.inv')
+            inv_path = shard_path.with_suffix(".inv")
             if inv_path.exists():
                 inv_path.unlink()
 
@@ -166,8 +267,11 @@ class IndexWriter:
         if not self._opened:
             raise ValueError("Writer not opened")
         from .reshard import IndexResharder
+
         self._finalize_shard()
-        with IndexResharder(str(self.index.root), target_shard_size_mb, keep_originals) as resharder:
+        with IndexResharder(
+            str(self.index.root), target_shard_size_mb, keep_originals
+        ) as resharder:
             stats = resharder.reshard()
         self.index.refresh()
         return stats
@@ -179,6 +283,7 @@ class IndexWriter:
         if model_id:
             try:
                 from sentence_transformers import SentenceTransformer
+
                 self._model = SentenceTransformer(model_id)
                 return self._model
             except Exception:
@@ -196,39 +301,34 @@ class IndexWriter:
         """Finalize current shard if it exists."""
         if self._writer is None:
             return
-        
-        # Close shard writer
+
         self._writer.close()
-        
-        # Check if temp file exists
+
         if not self._temp_path.exists():
             logger.warning(f"Temp shard file missing: {self._temp_path}")
             self._writer = None
             self._temp_path = None
             return
-        
-        # Hash and rename temp shard to final location
+
         shard_hash = hash_file(self._temp_path)
         final_path = self.index.root / f"{shard_hash}.fb"
-        
+
         # Atomic rename using os.replace
         os.replace(self._temp_path, final_path)
-        
-        # Write inverted index if available
+
         inv_index = self._writer.get_inverted_index()
         if inv_index is not None:
-            inv_path = final_path.with_suffix('.inv')
+            inv_path = final_path.with_suffix(".inv")
             inv_writer = InvertedIndexWriter(str(inv_path))
             inv_writer.write(inv_index)
             inv_writer.close()
             logger.debug(f"Written inverted index: {inv_path.name}")
-        
-        # Update manifest
+
         self.index.manifest.shard_hashes.append(shard_hash)
+        self.index.manifest.bump_commit()  # Structural change - bump commit_id
         self.index.manifest.save(self.index.root)
-        
+
         logger.debug(f"Finalized shard: {shard_hash[:16]}...")
-        
-        # Clean up
+
         self._writer = None
         self._temp_path = None

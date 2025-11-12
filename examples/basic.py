@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Benchmark (NEW API): SPLADE-easy Index/IndexReader memory-only search
+Benchmark: SPLADE-easy Index/IndexReader memory-only search
 
 Measures:
   - encode: model.encode(query)
-  - score_only: reader.search_vectors(..., return_text=False)
-  - attach_text: reader.search_vectors(..., return_text=True) for top_k
+  - score_only: reader.search(..., return_text=False)
+  - attach_text: reader.search(..., return_text=True) for top_k
 
 Notes:
   - Forces true memory mode by loading shards into RAM.
@@ -82,9 +82,9 @@ def main():
     print(f"Memory cache shards: {len(index._cache)}")
 
     # Warmup a search path (threadpools/JIT/etc.)
-    _ = reader.search_text("warmup", model=model, top_k=1, return_text=False, num_workers=1)
+    _ = reader.search(query="warmup", model=model, top_k=1, return_text=False, num_workers=1)
 
-    print("\n=== NEW API (memory-only benchmark) ===")
+    print("\n=== Memory-only benchmark ===")
     for q in args.queries:
         # 1) Encode (measured)
         enc_time, enc = time_encode(model, q)
@@ -92,8 +92,8 @@ def main():
 
         # 2) Scoring only (no text attachment)
         t0 = time.perf_counter()
-        _ = reader.search_vectors(
-            tok, w, top_k=args.top_k, return_text=False, num_workers=args.workers
+        _ = reader.search(
+            query_tokens=tok, query_weights=w, top_k=args.top_k, return_text=False, num_workers=args.workers
         )
         t1 = time.perf_counter()
         score_time = t1 - t0
@@ -102,8 +102,8 @@ def main():
         t2 = time.perf_counter()
         pr = cProfile.Profile()
         pr.enable()
-        results = reader.search_vectors(
-            tok, w, top_k=args.top_k, return_text=True, num_workers=args.workers
+        results = reader.search(
+            query_tokens=tok, query_weights=w, top_k=args.top_k, return_text=True, num_workers=args.workers
         )
         pr.disable()
         s = io.StringIO()

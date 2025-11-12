@@ -3,6 +3,7 @@
 import hashlib
 import logging
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -37,23 +38,27 @@ def hash_file(path: Path) -> str:
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
-def extract_model_id(model) -> str:
+def extract_model_id(model: Any) -> str:
     """Extract model ID from sentence-transformers model."""
     try:
-        if (
-            hasattr(model, "model_card_data")
-            and model.model_card_data
-            and hasattr(model.model_card_data, "model_id")
-            and model.model_card_data.model_id
-        ):
-            return model.model_card_data.model_id
+        # Check model_card_data (sentence-transformers v3+)
+        if hasattr(model, "model_card_data") and model.model_card_data:
+            mcd = model.model_card_data
+            # Try model_id first
+            if hasattr(mcd, "model_id") and mcd.model_id:
+                return mcd.model_id
+            # Fall back to base_model
+            if hasattr(mcd, "base_model") and mcd.base_model:
+                return mcd.base_model
 
+        # Try legacy _model_card_text
         if hasattr(model, "_model_card_text") and model._model_card_text:
             lines = model._model_card_text.split("\n")
             for line in lines:
                 if "model_id:" in line.lower():
                     return line.split(":", 1)[1].strip()
 
+        # Try _model_name or model_name attributes
         if hasattr(model, "_model_name"):
             return model._model_name
         if hasattr(model, "model_name"):
@@ -64,7 +69,7 @@ def extract_model_id(model) -> str:
     return "unknown"
 
 
-def extract_splade_vectors(encoding, threshold: float = 1e-3) -> tuple[np.ndarray, np.ndarray]:
+def extract_splade_vectors(encoding: Any, threshold: float = 1e-3) -> tuple[np.ndarray, np.ndarray]:
     """
     Extract token IDs and weights from SPLADE encoding.
 

@@ -1,10 +1,11 @@
 import struct
 from collections.abc import Iterator
 from pathlib import Path
+
+import flatbuffers
 import numpy as np
 
 from .SpladeEasy import Document, KeyValue
-import flatbuffers
 
 
 class ShardWriter:
@@ -14,26 +15,33 @@ class ShardWriter:
         if write_batch_size <= 0:
             raise ValueError(f"write_batch_size must be positive, got {write_batch_size}")
         self.path = Path(path)
-        self.f = open(path, "ab")
+        self.f = open(path, "ab")  # noqa: SIM115 - file kept open for writer's lifetime, closed in close()
         self._size = 0
         self.initial_buffer_size = initial_buffer_size
         self.write_batch_size = write_batch_size
         self.write_buffer = []
         self._inverted_index_builder = None
-    
+
     def enable_inverted_index(self):
         """Enable building inverted index while writing"""
         from .inverted_index import InvertedIndexBuilder
+
         self._inverted_index_builder = InvertedIndexBuilder()
-    
-    def append(self, doc_id: str, text: str | bytes, metadata: dict, token_ids: np.ndarray, weights: np.ndarray) -> None:
+
+    def append(
+        self,
+        doc_id: str,
+        text: str | bytes,
+        metadata: dict,
+        token_ids: np.ndarray,
+        weights: np.ndarray,
+    ) -> None:
         builder = flatbuffers.Builder(self.initial_buffer_size)
 
         # Vectors (zero-copy from numpy)
         token_ids_vec = builder.CreateNumpyVector(token_ids.astype(np.uint32, copy=False))
         weights_vec = builder.CreateNumpyVector(weights.astype(np.float32, copy=False))
 
-        # Metadata
         meta_offsets = []
         for k, v in metadata.items():
             key_off = builder.CreateString(k)
@@ -48,16 +56,15 @@ class ShardWriter:
             builder.PrependUOffsetTRelative(off)
         metadata_vec = builder.EndVector()
 
-        # doc_id
         doc_id_off = builder.CreateString(doc_id)
 
-        # text as [ubyte] (UTF-8 bytes)
         if isinstance(text, str):
             text = text.encode("utf-8")
-        text_arr = np.frombuffer(text, dtype=np.uint8) if text is not None else np.zeros(0, np.uint8)
+        text_arr = (
+            np.frombuffer(text, dtype=np.uint8) if text is not None else np.zeros(0, np.uint8)
+        )
         text_vec = builder.CreateNumpyVector(text_arr)
 
-        # Build table
         Document.DocumentStart(builder)
         Document.DocumentAddDocId(builder, doc_id_off)
         Document.DocumentAddText(builder, text_vec)
@@ -69,10 +76,10 @@ class ShardWriter:
         builder.Finish(doc_off)
 
         buf = bytes(builder.Output())
-        
+
         # Record offset for inverted index
         doc_offset = self._size + 4
-        
+
         self.write_buffer.append((len(buf), buf))
         self._size += 4 + len(buf)
 
@@ -96,7 +103,7 @@ class ShardWriter:
     def close(self) -> None:
         self._flush()
         self.f.close()
-    
+
     def get_inverted_index(self):
         """Get the built inverted index (call after all documents are added)"""
         if self._inverted_index_builder is None:
@@ -119,7 +126,9 @@ class ShardReader:
                 self.data = np.memmap(path, dtype="uint8", mode="r")
         self.size = 0 if self.data is None else len(self.data)
 
-    def scan(self, load_text: bool | str = True, *, want_positions: bool = False, light: bool = False) -> Iterator[dict]:
+    def scan(
+        self, load_text: bool | str = True, *, want_positions: bool = False, light: bool = False
+    ) -> Iterator[dict]:
         """
         load_text: False | "bytes" | True
         want_positions: include ('_pos': (offset, msg_len)) for each record
@@ -148,7 +157,6 @@ class ShardReader:
                 weights = None
                 metadata = None
             else:
-                # metadata decode (still cheap-ish but skip if not needed)
                 metadata = {}
                 for i in range(doc.MetadataLength()):
                     kv = doc.Metadata(i)
@@ -157,14 +165,17 @@ class ShardReader:
                 token_ids = doc.TokenIdsAsNumpy()
                 weights = doc.WeightsAsNumpy()
 
-            # text
             text_value = None
             if load_text:
                 text_np = doc.TextAsNumpy()  # zero-copy numpy view over memmap
                 if isinstance(load_text, str) and load_text == "bytes":
                     text_value = memoryview(text_np) if text_np is not None else memoryview(b"")
                 else:
-                    text_value = (memoryview(text_np).tobytes().decode("utf-8")) if text_np is not None else ""
+                    text_value = (
+                        (memoryview(text_np).tobytes().decode("utf-8"))
+                        if text_np is not None
+                        else ""
+                    )
 
             rec = {
                 "doc_id": did,
@@ -181,41 +192,38 @@ class ShardReader:
 
     def read_text_at(self, rec_offset: int) -> memoryview | None:
         """Return a zero-copy memoryview over the text bytes for the record starting at rec_offset."""
-        # rec_offset points to the start of the FB table
         doc = Document.Document.GetRootAs(self.data[rec_offset:], 0)
         text_np = doc.TextAsNumpy()
         return memoryview(text_np) if text_np is not None else None
-    
+
     def read_at_offset(self, rec_offset: int) -> dict | None:
         """Load full document at specific offset"""
         if self.data is None or rec_offset >= self.size:
             return None
-        
+
         try:
-            # Read message length
             if rec_offset < 4:
                 return None
             msg_len = struct.unpack_from("I", self.data, rec_offset - 4)[0]
-            
+
             if rec_offset + msg_len > self.size:
                 return None
-            
+
             doc = Document.Document.GetRootAs(self.data[rec_offset:], 0)
-            
-            # Decode fields
+
             did = doc.DocId().decode()
-            
+
             metadata = {}
             for i in range(doc.MetadataLength()):
                 kv = doc.Metadata(i)
                 metadata[kv.Key().decode()] = kv.Value().decode()
-            
+
             token_ids = doc.TokenIdsAsNumpy()
             weights = doc.WeightsAsNumpy()
-            
+
             return {
                 "doc_id": did,
-                "text": None,  # Don't load text by default
+                "text": None,
                 "metadata": metadata,
                 "token_ids": token_ids,
                 "weights": weights,

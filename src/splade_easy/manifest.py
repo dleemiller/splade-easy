@@ -10,6 +10,24 @@ from typing import Optional
 
 @dataclass
 class Manifest:
+    """
+    Index manifest containing metadata and shard references.
+
+    The manifest tracks the index structure, document count, and shard locations.
+    It uses a commit_id to detect structural changes (resharding, compaction, etc.)
+    for cache invalidation.
+
+    Attributes:
+        version: Manifest format version
+        model_id: Identifier of the SPLADE model used for encoding
+        shard_hashes: Content-addressed hashes of shard files
+        num_docs: Total number of documents in the index
+        shard_size_mb: Target size for new shards
+        commit_id: UUID that changes on structural modifications
+        created_at: ISO timestamp of index creation
+        updated_at: ISO timestamp of last modification
+    """
+
     version: str = "0.1.0"
     model_id: Optional[str] = None
     shard_hashes: list[str] = field(default_factory=list)
@@ -21,13 +39,30 @@ class Manifest:
 
     @classmethod
     def path_for(cls, root: Path) -> Path:
+        """
+        Get the manifest file path for an index directory.
+
+        Args:
+            root: Index root directory
+
+        Returns:
+            Path to manifest.json
+        """
         return root / "manifest.json"
 
     @classmethod
     def load(cls, root: Path) -> "Manifest":
+        """
+        Load manifest from index directory, creating new one if missing.
+
+        Args:
+            root: Index root directory
+
+        Returns:
+            Loaded or newly created manifest
+        """
         manifest_path = cls.path_for(root)
         if not manifest_path.exists():
-            # Create new manifest if it doesn't exist
             manifest = cls()
             manifest.save(root)
             return manifest
@@ -37,6 +72,14 @@ class Manifest:
         return cls(**data)
 
     def save(self, root: Path) -> None:
+        """
+        Save manifest atomically to disk.
+
+        Uses a temporary file and atomic rename to ensure consistency.
+
+        Args:
+            root: Index root directory
+        """
         root.mkdir(parents=True, exist_ok=True)
         manifest_path = self.path_for(root)
 
@@ -51,8 +94,23 @@ class Manifest:
         os.replace(temp_path, manifest_path)
 
     def bump_commit(self) -> None:
+        """
+        Increment commit ID to indicate structural changes.
+
+        Call this when the index structure changes (new shard, deletion, resharding)
+        to invalidate dependent caches.
+        """
         self.commit_id = str(uuid.uuid4())
         self.updated_at = datetime.now().isoformat()
 
     def shard_paths(self, root: Path) -> list[Path]:
+        """
+        Get paths to all existing shard files.
+
+        Args:
+            root: Index root directory
+
+        Returns:
+            List of paths to .fb shard files that exist on disk
+        """
         return [root / f"{h}.fb" for h in self.shard_hashes if (root / f"{h}.fb").exists()]

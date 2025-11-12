@@ -46,6 +46,9 @@ dev = [
 [tool.ruff]
 target-version = "py39"
 line-length = 100
+exclude = [
+    "src/splade_easy/SpladeEasy/",  # Generated FlatBuffers code
+]
 
 [tool.ruff.lint]
 select = [

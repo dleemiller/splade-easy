@@ -337,9 +337,9 @@ class TestSpladeIndex:
         for shard_path in shard_paths[:-1]:  # Check all but last (may be partial)
             size_mb = shard_path.stat().st_size / (1024 * 1024)
             # Allow 50% tolerance (0.5MB to 1.5MB for 1MB target)
-            assert (
-                size_mb >= target_size_mb * 0.5
-            ), f"Shard {shard_path.name} is {size_mb:.2f}MB, should be ~{target_size_mb}MB"
+            assert size_mb >= target_size_mb * 0.5, (
+                f"Shard {shard_path.name} is {size_mb:.2f}MB, should be ~{target_size_mb}MB"
+            )
 
     def test_reshard_updates_metadata(self, temp_index_dir):
         """Regression: reshard must update metadata.json (Bug 2)."""
@@ -365,17 +365,17 @@ class TestSpladeIndex:
 
         # Verify metadata was updated
         assert index.metadata["num_docs"] == 100, "Doc count should be preserved"
-        assert (
-            index.metadata["num_shards"] == stats["new_shards"]
-        ), "num_shards should match reshard result"
-        assert (
-            len(index.metadata["shard_hashes"]) == stats["new_shards"]
-        ), "shard_hashes length should match num_shards"
+        assert index.metadata["num_shards"] == stats["new_shards"], (
+            "num_shards should match reshard result"
+        )
+        assert len(index.metadata["shard_hashes"]) == stats["new_shards"], (
+            "shard_hashes length should match num_shards"
+        )
 
         # Bug 2 specific: verify shard_size_mb was updated
-        assert (
-            index.metadata["shard_size_mb"] == new_target_size
-        ), f"shard_size_mb should be updated to {new_target_size}"
+        assert index.metadata["shard_size_mb"] == new_target_size, (
+            f"shard_size_mb should be updated to {new_target_size}"
+        )
 
         # Verify all shards exist
         for shard_hash in index.metadata["shard_hashes"]:

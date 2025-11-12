@@ -72,7 +72,6 @@ def compute_splade_score(
     if doc_norm == 0.0 or query_norm == 0.0:
         return 0.0
 
-    # Cosine similarity
     return dot_product / (doc_norm * query_norm)
 
 
@@ -118,10 +117,8 @@ def ensure_sorted_splade_vector(
     if len(token_ids) <= 1:
         return token_ids, weights
 
-    # Check if already sorted
     if np.all(token_ids[:-1] <= token_ids[1:]):
         return token_ids, weights
 
-    # Sort both arrays by token_ids
     sort_idx = np.argsort(token_ids)
     return token_ids[sort_idx], weights[sort_idx]

@@ -69,12 +69,12 @@ class DatasetIngest:
 
         with index.writer(shard_size_mb=self.shard_size_mb) as writer:
             writer.set_model(self.model)
-            
+
             for i, row in track(enumerate(ds), total=len(ds), description="Ingesting"):
                 doc_id = self._make_doc_id(row, i)
                 text = self._make_text(row)
                 metadata = self._make_metadata(row)
-                
+
                 writer.insert(doc_id=doc_id, text=text, metadata=metadata)
 
         stats = index.stats

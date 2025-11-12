@@ -7,6 +7,8 @@ import logging
 import os
 import shutil
 import sys
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 from splade_easy.shard import ShardReader, ShardWriter
@@ -37,11 +39,9 @@ class IndexResharder:
         if not self.meta_path.exists():
             raise ValueError(f"Index not found: {self.index_dir}")
 
-        # Load metadata
         with open(self.meta_path) as f:
             self.metadata = json.load(f)
 
-        # Load deleted IDs
         self.deleted_ids = set()
         if self.deleted_path.exists():
             with open(self.deleted_path) as f:
@@ -86,13 +86,11 @@ class IndexResharder:
 
         # Success - commit changes atomically
         try:
-            # Update metadata
             temp_meta = self.index_dir / "_metadata.json.tmp"
             with open(temp_meta, "w") as f:
                 json.dump(self.metadata, f, indent=2)
             temp_meta.replace(self.meta_path)
 
-            # Clear deleted IDs
             self.deleted_path.unlink(missing_ok=True)
 
             # Remove old shards - BUT ONLY if they're not in the new shard list
@@ -129,19 +127,16 @@ class IndexResharder:
         current_temp_path = None
         docs_written = 0
 
-        # Read all non-deleted docs
         for shard_path in self.old_shards:
             reader = ShardReader(str(shard_path))
             for doc in reader.scan(load_text=True):
                 if doc["doc_id"] in self.deleted_ids:
                     continue
 
-                # Create new writer if needed
                 if current_writer is None:
                     current_temp_path = self.temp_dir / f"temp_{len(self.new_shard_hashes)}.fb"
                     current_writer = ShardWriter(str(current_temp_path))
 
-                # Write document
                 current_writer.append(
                     doc["doc_id"],
                     doc["text"],
@@ -159,16 +154,18 @@ class IndexResharder:
 
             reader.close()
 
-        # Finalize last shard
         if current_writer is not None:
             shard_hash = self._finalize_shard(current_writer, current_temp_path)
             self.new_shard_hashes.append(shard_hash)
 
-        # Update metadata
         self.metadata["shard_hashes"] = self.new_shard_hashes
         self.metadata["num_shards"] = len(self.new_shard_hashes)
         self.metadata["num_docs"] = docs_written
         self.metadata["shard_size_mb"] = self.target_size_bytes // (1024 * 1024)
+
+        # Bump commit_id for structural change
+        self.metadata["commit_id"] = str(uuid.uuid4())
+        self.metadata["updated_at"] = datetime.now().isoformat()
 
         self.success = True
 

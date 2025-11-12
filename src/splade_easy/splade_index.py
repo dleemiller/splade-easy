@@ -4,6 +4,7 @@ Memory vs Disk Comparison:
   Memory mode: 8.1ms avg
   Speedup: 9.0x
 """
+
 import json
 import logging
 import os

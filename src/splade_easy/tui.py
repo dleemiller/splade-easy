@@ -279,6 +279,13 @@ class NewIndexPanel(Container):
     NewIndexPanel #preview { color: $text-muted; padding: 1 0; max-height: 10; }
     NewIndexPanel #error { color: $error; padding: 1 0; min-height: 1; }
     NewIndexPanel #fetch { margin: 1 0; }
+    NewIndexPanel #cols {
+        min-height: 7;
+        max-height: 12;
+        border: round $primary;
+        margin-bottom: 1;
+    }
+    NewIndexPanel #cols_label { color: $accent; padding-top: 1; }
     """
 
     def compose(self) -> ComposeResult:
@@ -296,9 +303,9 @@ class NewIndexPanel(Container):
             yield Select[str](options=[], id="config_set", prompt="(fetch metadata first)")
             yield Label("Split", classes="label")
             yield Select[str](options=[], id="split_set", prompt="(fetch metadata first)")
-            yield Label(
-                "Text column(s) — pick one or more; multiple are joined with newlines",
-                classes="label",
+            yield Static(
+                "Text columns (fetch a dataset to populate)",
+                id="cols_label",
             )
             yield SelectionList[str](id="cols")
             yield Static("", id="preview")
@@ -580,6 +587,14 @@ class SpladeTUI(App):
         for c in cols:
             preselect = c.lower() in {"text", "body", "content", "document"}
             col_widget.add_option(Selection(c, c, preselect))
+        label = self.query_one("#cols_label", Static)
+        if cols:
+            label.update(
+                f"Text columns — {len(cols)} available "
+                "(check one or more; multiple are joined with newlines per row)"
+            )
+        else:
+            label.update("Text columns — no columns reported by this dataset")
         self.query_one("#preview", Static).update("")
 
     @on(SelectionList.SelectedChanged, "#cols")

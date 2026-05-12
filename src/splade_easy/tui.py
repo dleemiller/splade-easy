@@ -591,6 +591,9 @@ class SpladeTUI(App):
         )
         self._config_path = _config_path()
         self.settings: Settings = Settings.load(self._config_path)
+        self._index_status_msg: str = ""
+        self._index_start_time: float = 0.0
+        self._index_ticker = None  # Textual Timer | None
 
     # ---- composition ----
 
@@ -935,23 +938,27 @@ class SpladeTUI(App):
 
     @work(thread=True, exclusive=True, group="index")
     def _index_worker(self, params: dict) -> None:
-        detail = self.query_one("#detail", Static)
         progress = self.query_one("#progress", ProgressBar)
         try:
             t0 = time.time()
+            self.call_from_thread(self._start_index_ticker)
             if params["max_docs"]:
                 self.call_from_thread(self._show_progress, params["max_docs"])
-                self.call_from_thread(detail.update, "Streaming rows from HuggingFace…")
             else:
                 self.call_from_thread(self._show_spinner)
-                self.call_from_thread(detail.update, "Streaming rows from HuggingFace…")
+            self.call_from_thread(
+                self._set_index_status,
+                "Streaming rows from HuggingFace (first parquet shard may take a minute)…",
+            )
 
             def _on_load(done: int, total: int | None) -> None:
                 if total:
                     self.call_from_thread(progress.update, progress=done)
-                    self.call_from_thread(detail.update, f"Streamed {done:,} / {total:,} rows")
+                    self.call_from_thread(
+                        self._set_index_status, f"Streamed {done:,} / {total:,} rows"
+                    )
                 else:
-                    self.call_from_thread(detail.update, f"Streamed {done:,} rows so far…")
+                    self.call_from_thread(self._set_index_status, f"Streamed {done:,} rows so far…")
 
             texts = _load_dataset_rows(
                 params["repo"],
@@ -963,17 +970,17 @@ class SpladeTUI(App):
             )
             n = len(texts)
             self.call_from_thread(
-                detail.update,
+                self._set_index_status,
                 f"Encoding {n:,} docs with {params['model'].split('/')[-1]}…",
             )
             self.call_from_thread(self._show_progress, n)
 
             def _on_progress(done: int, total: int) -> None:
                 self.call_from_thread(progress.update, progress=done)
+                rate = done / max(1, time.time() - t0)
                 self.call_from_thread(
-                    detail.update,
-                    f"Encoding {done:,} / {total:,} docs"
-                    f" ({done / max(1, time.time() - t0):.0f} docs/s)",
+                    self._set_index_status,
+                    f"Encoding {done:,} / {total:,} docs ({rate:.0f} docs/s)",
                 )
 
             sparse_docs = encode_corpus(
@@ -986,17 +993,49 @@ class SpladeTUI(App):
                 progress_callback=_on_progress,
             )
             self.call_from_thread(self._show_spinner)
-            self.call_from_thread(detail.update, "Building inverted index…")
+            self.call_from_thread(self._set_index_status, "Building inverted index…")
             retriever = SpladeRetriever(model=params["model"])
             retriever.index(sparse_docs)
             target = self.indexes_dir / params["name"]
-            self.call_from_thread(detail.update, f"Saving to {target}…")
+            self.call_from_thread(self._set_index_status, f"Saving to {target}…")
             corpus_arg = texts if self.settings.save_corpus else None
             retriever.save(target, corpus=corpus_arg)
             elapsed = time.time() - t0
             self.call_from_thread(self._on_index_done, params["name"], elapsed)
         except Exception as e:
             self.call_from_thread(self._on_index_failed, str(e))
+        finally:
+            self.call_from_thread(self._stop_index_ticker)
+
+    # ---- detail-line ticker ----
+    # During shard downloads, the streaming iterator can block for tens of
+    # seconds with zero callbacks fired -- the screen looks frozen. The ticker
+    # repaints the detail line every second with the latest status + elapsed
+    # time so the user always has visible movement.
+
+    def _set_index_status(self, msg: str) -> None:
+        self._index_status_msg = msg
+        self._repaint_index_detail()
+
+    def _start_index_ticker(self) -> None:
+        self._index_start_time = time.time()
+        self._index_status_msg = ""
+        if self._index_ticker is None:
+            self._index_ticker = self.set_interval(1.0, self._repaint_index_detail)
+
+    def _stop_index_ticker(self) -> None:
+        if self._index_ticker is not None:
+            self._index_ticker.stop()
+            self._index_ticker = None
+
+    def _repaint_index_detail(self) -> None:
+        elapsed = time.time() - self._index_start_time
+        elapsed_str = (
+            f"{elapsed:.0f}s" if elapsed < 60 else f"{int(elapsed // 60)}m{int(elapsed % 60):02d}s"
+        )
+        msg = self._index_status_msg or "Working…"
+        with contextlib.suppress(Exception):
+            self.query_one("#detail", Static).update(f"{msg}  ·  elapsed {elapsed_str}")
 
     def _show_progress(self, total: int) -> None:
         progress = self.query_one("#progress", ProgressBar)

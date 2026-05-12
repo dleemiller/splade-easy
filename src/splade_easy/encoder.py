@@ -11,6 +11,12 @@ import numpy as np
 from . import models, sparse
 from .tokenizer import QueryTokenizer
 
+DEFAULT_MAX_SEQ_LENGTH = 512
+"""Sane default for SPLADE retrieval. Some models (e.g. GTE-base) advertise much
+longer context (8192) but attention is O(B*H*N²) so the model's max-length default
+trivially OOMs a 96GB GPU at batch_size=32. Retrieval signal is overwhelmingly in
+the first ~512 tokens; callers who want more can pass `max_seq_length` explicitly."""
+
 
 def encode_corpus(
     corpus: Sequence[str],
@@ -27,6 +33,10 @@ def encode_corpus(
     For known models, `trust_remote_code` defaults to whatever the registry says
     (e.g. True for the gte family). Pass it explicitly to override. Unknown
     models default to False (safe).
+
+    `max_seq_length` defaults to 512 (see `DEFAULT_MAX_SEQ_LENGTH`); the model's
+    own much-longer default would OOM the GPU during encode for most rigs and
+    gives near-zero retrieval lift past ~512 tokens.
 
     If `progress_callback` is supplied, it's invoked as `(n_done, n_total)` after
     each batch. The corpus is encoded in `batch_size`-sized chunks so the callback
@@ -55,8 +65,7 @@ def encode_corpus(
         trust_remote_code=trc,
         model_kwargs=model_kwargs,
     )
-    if max_seq_length is not None:
-        enc.max_seq_length = max_seq_length
+    enc.max_seq_length = DEFAULT_MAX_SEQ_LENGTH if max_seq_length is None else max_seq_length
 
     corpus_list = list(corpus)
     n_total = len(corpus_list)

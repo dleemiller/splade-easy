@@ -325,7 +325,10 @@ class SettingsModal(ModalScreen["Settings | None"]):
             yield Label("Encoder batch size", classes="label")
             yield Input(value=str(s.batch_size), id="s_batch_size")
 
-            yield Label("Max sequence length (blank = model default)", classes="label")
+            yield Label(
+                "Max sequence length (blank = 512; higher costs O(N²) attention memory)",
+                classes="label",
+            )
             yield Input(value="" if s.max_seq_length is None else str(s.max_seq_length), id="s_msl")
 
             yield Label("Default top-k in search", classes="label")

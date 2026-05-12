@@ -1,130 +1,103 @@
-# SPLADE-Easy
+# splade-easy
 
-A lightweight, portable SPLADE index for small-scale document retrieval and RAG applications.
+Fast, simple sparse retrieval for small corpora using **inference-free SPLADE** models. Inspired by [bm25s](https://github.com/xhluca/bm25s).
 
----
+The query path is transformer-free: just a fast tokenizer + a dense IDF lookup + an inverted-index scoring loop. Document encoding runs offline once, on whatever hardware is convenient.
 
-## Overview
+Target: indexes up to ~100k documents.
 
-SPLADE-Easy provides a simple interface for creating and querying sparse lexical indexes produced by [SPLADE](https://huggingface.co/naver/splade-v3) models. It is designed for small to medium datasets (up to about one million documents) where efficient, interpretable retrieval is needed without the overhead of a full vector database.
-
----
-
-## Installation
+## Install
 
 ```bash
-uv sync
+uv add splade-easy                  # query-only (numpy + tokenizers)
+uv add 'splade-easy[encode]'        # also pulls torch + sentence-transformers for doc encoding
+uv add 'splade-easy[encode,eval]'   # adds NanoBEIR datasets loader
 ```
 
-Requires **Python 3.11+**.
+Requires Python 3.11+.
 
----
-
-## Quick Start
+## Quickstart
 
 ```python
-from sentence_transformers import SentenceTransformer
-from splade_easy import SpladeIndex
+import splade_easy as se
 
-model = SentenceTransformer("naver/splade-v3")
+corpus = [
+    "A cat is a small carnivorous mammal.",
+    "Dogs are loyal companions and pack animals.",
+    "Pythons are non-venomous constrictor snakes.",
+]
 
-# Create or open an index
-index = SpladeIndex("./my_index")
+# Offline — encode docs (slow, runs the SPLADE doc model)
+sparse_docs = se.encode_corpus(corpus)
 
-# Add documents
-index.add_text(
-    doc_id="doc1",
-    text="Machine learning is a subset of artificial intelligence.",
-    metadata={"source": "wiki"},
-    model=model,
-)
+# Build index
+retriever = se.SpladeRetriever()
+retriever.index(sparse_docs)
+retriever.save("./idx", corpus=corpus)
 
-# Search
-retriever = SpladeIndex.retriever("./my_index", mode="memory")
-results = retriever.search_text("What is machine learning?", model=model, top_k=3)
-
-for r in results:
-    print(r.doc_id, r.score)
+# Online — no transformer is loaded
+retriever = se.SpladeRetriever.load("./idx", load_corpus=True)
+results, scores = retriever.retrieve("what is a feline?", k=2, return_docs=True)
 ```
 
----
+## Default model
 
-## Core Features
+`opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill` is auto-paired with its bundled `idf.json` for query weighting. Override either side via the `model=` and `query_weights=` arguments.
 
-* Simple API for SPLADE-based indexing and retrieval
-* Two modes:
+## On-disk layout
 
-  * **disk**: minimal memory footprint
-  * **memory**: faster in-RAM search
-* Parallel shard search
-* Soft deletes with compaction
-* Content-addressed shards for deterministic indexing
-* Atomic resharding and recovery-safe writes
-
----
-
-## Command Line Tools
-
-### Ingest a dataset
-
-```bash
-uv run ingest-dataset your_config.yaml
+```
+idx/
+  params.json           # model id, sizes, version, dtypes
+  indptr.npy            # CSC inverted index
+  indices.npy
+  data.npy
+  query_weights.npy     # dense (vocab_size,) IDF lookup
+  tokenizer/            # HF fast tokenizer files
+  corpus.jsonl          # optional
 ```
 
-### Reshard or resize an index
+## Performance
 
-```bash
-uv run reshard ./my_index --target-size-mb 64
-```
+Query latency, single thread, k=10, synthetic SPLADE-like corpus (vocab 30522, 100-250 nnz/doc):
 
----
+| corpus  | backend | mean ms/q | p95 ms/q | speedup |
+|---------|---------|-----------|----------|---------|
+| 10k     | numpy   | 0.171     | 0.262    | 1.0x    |
+| 10k     | cython  | **0.027** | 0.037    | 6.9x    |
+| 50k     | numpy   | 0.709     | 1.138    | 1.0x    |
+| 50k     | cython  | **0.103** | 0.150    | 7.0x    |
 
-## Maintenance
+Reproduce: `uv run python benchmarks/bench_query.py --docs 50000 --queries 1000`.
 
-```python
-index.delete("doc1")      # mark as deleted
-index.compact()           # remove deleted documents
-stats = index.stats()     # get index statistics
-```
+## Quality (NanoBEIR)
 
----
+Auto-eval with the default model on `zeta-alpha-ai/Nano*` subsets:
 
-## Design Highlights
+| dataset  | NDCG@10 | Recall@10 | MRR@10 |
+|----------|---------|-----------|--------|
+| scifact  | 0.743   | 0.930     | 0.687  |
+| nq       | 0.707   | 0.850     | 0.669  |
+| fiqa     | 0.482   | 0.553     | 0.545  |
+| nfcorpus | 0.347   | 0.143     | 0.499  |
 
-| Component              | Purpose                               |
-| ---------------------- | ------------------------------------- |
-| **FlatBuffers**        | Fast zero-copy deserialization        |
-| **Append-only shards** | Reliable write pattern for durability |
-| **SHA-256 filenames**  | Deterministic and portable storage    |
-| **Numba acceleration** | Efficient scoring on CPU              |
-| **Atomic writes**      | Prevents partial shard corruption     |
-
----
+Reproduce: `uv run splade-eval-nanobeir --datasets scifact,nq,fiqa,nfcorpus`.
 
 ## Development
 
 ```bash
-git clone https://github.com/yourusername/splade-easy
-cd splade-easy
-
-# Install dev environment
-make install
-
-# Run tests
-make test
-
-# Run tests with coverage
-make test-cov
-
-# Lint and format
-make lint
-make format
-
-# Run all pre-commit hooks
-make pre-commit
-
-# Clean
-
-MIT License © 2025
-
+uv sync --extra encode --extra eval --group dev
+uv run pytest                                  # 51 tests, ~0.2s
+uv run cython-lint src/splade_easy/_scoring.pyx
+uv run python benchmarks/bench_query.py
 ```
+
+Cython hot path is in `src/splade_easy/_scoring.pyx`. A pure-numpy reference at `src/splade_easy/_scoring_py.py` is used in tests for parity checks and as a fallback when the C extension isn't built. The build is driven by `setup.py` + `setuptools.build_meta`.
+
+## Status
+
+Alpha.
+
+## License
+
+MIT.

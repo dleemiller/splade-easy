@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -124,42 +125,50 @@ class DatasetMeta:
 
 
 def _fetch_dataset_metadata(repo: str) -> DatasetMeta:
-    """Return available configs/splits/columns without downloading rows.
-
-    `datasets` 4.x no longer supports a `trust_remote_code` kwarg (script-based
-    datasets aren't executed anymore); the parquet-backed view is used directly.
-    Any error from `datasets` is re-raised so the caller can show the real
-    cause rather than falling back to bogus defaults.
+    """Return only the list of config names; splits + columns are loaded lazily
+    per-config via `_fetch_config_details`. For huge datasets like FineWeb-Edu
+    with dozens of CommonCrawl-snapshot configs, fetching builder info for every
+    config upfront would enumerate millions of parquet files.
     """
-    from datasets import get_dataset_config_names, load_dataset_builder
+    from datasets import get_dataset_config_names
 
-    configs = get_dataset_config_names(repo)
+    try:
+        configs = get_dataset_config_names(repo)
+    except Exception as e:
+        raise RuntimeError(f"Could not enumerate configs for {repo}: {e}") from e
+
     if not configs:
-        configs = [None]  # dataset with no named configs
-
-    splits_by_config: dict[str, list[str]] = {}
-    cols_by_config: dict[str, list[str]] = {}
-    first_err: Exception | None = None
-    for cfg in configs:
-        try:
-            builder = load_dataset_builder(repo, cfg) if cfg else load_dataset_builder(repo)
-        except Exception as e:
-            if first_err is None:
-                first_err = e
-            continue
-        info = builder.info
-        splits_by_config[cfg or ""] = sorted((info.splits or {}).keys())
-        cols_by_config[cfg or ""] = list((info.features or {}).keys())
-
-    if not splits_by_config:
-        raise RuntimeError(f"Could not load metadata for {repo}: {first_err}") from first_err
+        configs = [""]  # dataset with no named configs — represent as empty string
 
     return DatasetMeta(
-        configs=[c or "" for c in configs if (c or "") in splits_by_config],
+        configs=[c or "" for c in configs],
         default_config=(configs[0] or "") if configs else "",
-        splits_by_config=splits_by_config,
-        columns_by_config=cols_by_config,
+        # splits/columns populated lazily per-config
     )
+
+
+def _fetch_config_details(repo: str, cfg: str) -> tuple[list[str], list[str]]:
+    """Get the splits and columns for a single config. Uses streaming to peek at
+    the first row for column names — avoids downloading any data files for the
+    schema lookup."""
+    from datasets import get_dataset_split_names, load_dataset
+
+    cfg_arg = cfg or None
+    splits = sorted(get_dataset_split_names(repo, cfg_arg) or [])
+    if not splits:
+        return [], []
+    # Streaming + take 1: peeks the first parquet block, no full download.
+    ds = (
+        load_dataset(repo, cfg_arg, split=splits[0], streaming=True)
+        if cfg_arg
+        else load_dataset(repo, split=splits[0], streaming=True)
+    )
+    try:
+        first_row = next(iter(ds))
+        cols = list(first_row.keys())
+    except StopIteration:
+        cols = []
+    return splits, cols
 
 
 def _load_dataset_rows(
@@ -168,26 +177,33 @@ def _load_dataset_rows(
     split: str,
     columns: list[str],
     max_docs: int | None,
+    progress_callback: Callable[[int, int | None], None] | None = None,
 ) -> tuple[list[str], list[dict]]:
-    """Load rows, join the chosen text columns. Returns (texts, raw_rows)."""
+    """Stream rows up to `max_docs` (or all if None) and join the chosen columns.
+
+    Uses `streaming=True` so a `max_docs=10000` request against a billion-doc
+    corpus only pulls the first parquet shard(s) it actually needs.
+    """
     from datasets import load_dataset
 
     ds = (
-        load_dataset(repo, config or None, split=split)
+        load_dataset(repo, config or None, split=split, streaming=True)
         if config
-        else load_dataset(repo, split=split)
+        else load_dataset(repo, split=split, streaming=True)
     )
-    n = len(ds)
-    if max_docs is not None and max_docs > 0:
-        n = min(n, max_docs)
 
     texts: list[str] = []
     raw: list[dict] = []
-    for i in range(n):
-        row = ds[i]
+    for i, row in enumerate(ds):
+        if max_docs is not None and max_docs > 0 and i >= max_docs:
+            break
         text = "\n".join(str(row[c]) for c in columns if c in row and row[c] is not None)
         texts.append(text)
-        raw.append({k: row[k] for k in row})
+        raw.append(dict(row))
+        if progress_callback is not None and (i + 1) % 200 == 0:
+            progress_callback(i + 1, max_docs)
+    if progress_callback is not None:
+        progress_callback(len(texts), max_docs)
     return texts, raw
 
 
@@ -553,8 +569,16 @@ class SpladeTUI(App):
         if not repo:
             self.query_one("#error", Static).update("Dataset id is required")
             return
-        self.query_one("#error", Static).update("Fetching metadata…")
+        self._set_fetch_busy(True, "Fetching configs… (large datasets may take a minute)")
         self._fetch_worker(repo)
+
+    def _set_fetch_busy(self, busy: bool, msg: str = "") -> None:
+        btn = self.query_one("#fetch", Button)
+        repo = self.query_one("#repo", Input)
+        btn.disabled = busy
+        repo.disabled = busy
+        btn.label = "Fetching…" if busy else "Fetch metadata"
+        self.query_one("#error", Static).update(msg)
 
     @work(thread=True, exclusive=True, group="fetch")
     def _fetch_worker(self, repo: str) -> None:
@@ -562,11 +586,11 @@ class SpladeTUI(App):
             meta = _fetch_dataset_metadata(repo)
             self.call_from_thread(self._on_metadata_loaded, repo, meta)
         except Exception as e:
-            self.call_from_thread(self.query_one("#error", Static).update, f"Fetch failed: {e}")
+            self.call_from_thread(self._set_fetch_busy, False, f"Fetch failed: {e}")
 
     def _on_metadata_loaded(self, repo: str, meta: DatasetMeta) -> None:
         self._dataset_meta = meta
-        self.query_one("#error", Static).update("")
+        self._set_fetch_busy(False, "")
         # Populate config dropdown
         config_set = self.query_one("#config_set", Select)
         options = [(cfg if cfg else "(default)", cfg) for cfg in meta.configs]
@@ -577,24 +601,70 @@ class SpladeTUI(App):
         name_input = self.query_one("#name", Input)
         if not name_input.value:
             name_input.value = _slugify(repo)
-        # Populate split + columns based on first config
-        self._on_config_changed(first_cfg)
+        # Splits + columns are loaded lazily for the just-selected config
+        self._load_config_details(first_cfg)
 
     @on(Select.Changed, "#config_set")
     def _config_changed(self, event: Select.Changed) -> None:
         meta = self._dataset_meta
         if meta is None or event.value is Select.BLANK:
             return
-        self._on_config_changed(str(event.value))
+        cfg = str(event.value)
+        # Use cached details if we already loaded them; otherwise fetch.
+        if cfg in meta.splits_by_config:
+            self._render_config_details(cfg)
+        else:
+            self._load_config_details(cfg)
 
-    def _on_config_changed(self, cfg: str) -> None:
+    def _load_config_details(self, cfg: str) -> None:
         meta = self._dataset_meta
         if meta is None:
             return
-        splits = meta.splits_by_config.get(cfg, ["train"])
+        if cfg in meta.splits_by_config:
+            self._render_config_details(cfg)
+            return
+        # Show pending state in the column label + clear splits dropdown.
+        self.query_one("#split_set", Select).set_options([])
+        self.query_one("#cols", SelectionList).clear_options()
+        self.query_one("#cols_label", Static).update(
+            f"Text columns — loading schema for {cfg or '(default)'!r}…"
+        )
+        repo = self.query_one("#repo", Input).value.strip()
+        self._config_details_worker(repo, cfg)
+
+    @work(thread=True, exclusive=True, group="cfg")
+    def _config_details_worker(self, repo: str, cfg: str) -> None:
+        try:
+            splits, cols = _fetch_config_details(repo, cfg)
+            self.call_from_thread(self._on_config_details_loaded, cfg, splits, cols)
+        except Exception as e:
+            self.call_from_thread(
+                self.query_one("#cols_label", Static).update,
+                f"Text columns — failed to load schema: {e}",
+            )
+
+    def _on_config_details_loaded(self, cfg: str, splits: list[str], cols: list[str]) -> None:
+        meta = self._dataset_meta
+        if meta is None:
+            return
+        meta.splits_by_config[cfg] = splits
+        meta.columns_by_config[cfg] = cols
+        # Only render if this is still the selected config
+        current = self.query_one("#config_set", Select).value
+        if current is not Select.BLANK and str(current) == cfg:
+            self._render_config_details(cfg)
+
+    def _render_config_details(self, cfg: str) -> None:
+        meta = self._dataset_meta
+        if meta is None:
+            return
+        splits = meta.splits_by_config.get(cfg, [])
         split_set = self.query_one("#split_set", Select)
-        split_set.set_options([(s, s) for s in splits])
-        split_set.value = splits[0]
+        if splits:
+            split_set.set_options([(s, s) for s in splits])
+            split_set.value = splits[0]
+        else:
+            split_set.set_options([])
 
         cols = meta.columns_by_config.get(cfg, [])
         col_widget = self.query_one("#cols", SelectionList)
@@ -609,7 +679,7 @@ class SpladeTUI(App):
                 "(check one or more; multiple are joined with newlines per row)"
             )
         else:
-            label.update("Text columns — no columns reported by this dataset")
+            label.update("Text columns — none reported by this config")
         self.query_one("#preview", Static).update("")
 
     @on(SelectionList.SelectedChanged, "#cols")
@@ -698,13 +768,27 @@ class SpladeTUI(App):
         progress = self.query_one("#progress", ProgressBar)
         try:
             t0 = time.time()
-            self.call_from_thread(self._show_spinner)
+            if params["max_docs"]:
+                self.call_from_thread(self._show_progress, params["max_docs"])
+                self.call_from_thread(detail.update, "Streaming rows from HuggingFace…")
+            else:
+                self.call_from_thread(self._show_spinner)
+                self.call_from_thread(detail.update, "Streaming rows from HuggingFace…")
+
+            def _on_load(done: int, total: int | None) -> None:
+                if total:
+                    self.call_from_thread(progress.update, progress=done)
+                    self.call_from_thread(detail.update, f"Streamed {done:,} / {total:,} rows")
+                else:
+                    self.call_from_thread(detail.update, f"Streamed {done:,} rows so far…")
+
             texts, _raw = _load_dataset_rows(
                 params["repo"],
                 params["config"],
                 params["split"],
                 params["cols"],
                 params["max_docs"],
+                progress_callback=_on_load,
             )
             n = len(texts)
             self.call_from_thread(

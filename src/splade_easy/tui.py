@@ -123,30 +123,38 @@ class DatasetMeta:
 
 
 def _fetch_dataset_metadata(repo: str) -> DatasetMeta:
-    """Return available configs/splits/columns without downloading rows."""
+    """Return available configs/splits/columns without downloading rows.
+
+    `datasets` 4.x no longer supports a `trust_remote_code` kwarg (script-based
+    datasets aren't executed anymore); the parquet-backed view is used directly.
+    Any error from `datasets` is re-raised so the caller can show the real
+    cause rather than falling back to bogus defaults.
+    """
     from datasets import get_dataset_config_names, load_dataset_builder
 
-    try:
-        configs = get_dataset_config_names(repo, trust_remote_code=False)
-    except Exception:
-        configs = []
+    configs = get_dataset_config_names(repo)
     if not configs:
-        configs = [None]  # default unnamed config
+        configs = [None]  # dataset with no named configs
 
     splits_by_config: dict[str, list[str]] = {}
     cols_by_config: dict[str, list[str]] = {}
+    first_err: Exception | None = None
     for cfg in configs:
         try:
             builder = load_dataset_builder(repo, cfg) if cfg else load_dataset_builder(repo)
-        except Exception:
+        except Exception as e:
+            if first_err is None:
+                first_err = e
             continue
         info = builder.info
-        splits_by_config[cfg or ""] = sorted((info.splits or {}).keys()) or ["train"]
-        cols = list((info.features or {}).keys())
-        cols_by_config[cfg or ""] = cols
+        splits_by_config[cfg or ""] = sorted((info.splits or {}).keys())
+        cols_by_config[cfg or ""] = list((info.features or {}).keys())
+
+    if not splits_by_config:
+        raise RuntimeError(f"Could not load metadata for {repo}: {first_err}") from first_err
 
     return DatasetMeta(
-        configs=[c or "" for c in configs],
+        configs=[c or "" for c in configs if (c or "") in splits_by_config],
         default_config=(configs[0] or "") if configs else "",
         splits_by_config=splits_by_config,
         columns_by_config=cols_by_config,

@@ -291,9 +291,10 @@ class NewIndexPanel(Container):
             yield Static("", id="error")
 
             yield Label("Config (subset)", classes="label")
-            yield Select[str](options=[], id="config_set", allow_blank=False)
+            # Start blank; populated after `Fetch metadata` succeeds.
+            yield Select[str](options=[], id="config_set", prompt="(fetch metadata first)")
             yield Label("Split", classes="label")
-            yield Select[str](options=[], id="split_set", allow_blank=False)
+            yield Select[str](options=[], id="split_set", prompt="(fetch metadata first)")
             yield Label(
                 "Text column(s) — pick one or more; multiple are joined with newlines",
                 classes="label",

@@ -10,6 +10,7 @@ flip between them without leaving the search context.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import re
 import shutil
@@ -446,6 +447,9 @@ class SpladeTUI(App):
         self.indexes_dir.mkdir(parents=True, exist_ok=True)
         self._prefill_dataset = prefill_dataset
         self._dataset_meta: DatasetMeta | None = None
+        self._indexing_name: str | None = (
+            None  # name of the dataset currently being indexed, or None
+        )
 
     # ---- composition ----
 
@@ -735,6 +739,12 @@ class SpladeTUI(App):
 
     @on(Button.Pressed, "#index_btn")
     def _on_index_btn(self) -> None:
+        if self._indexing_name is not None:
+            self.query_one("#error", Static).update(
+                f"Already indexing '{self._indexing_name}'. Wait for it to finish, "
+                "or quit and restart to drop it."
+            )
+            return
         if self._dataset_meta is None:
             self.query_one("#error", Static).update("Fetch metadata first")
             return
@@ -757,6 +767,8 @@ class SpladeTUI(App):
             "max_docs": max_docs,
             "model": model_id,
         }
+        self._indexing_name = name
+        self.query_one("#index_btn", Button).disabled = True
         self.query_one("#main", ContentSwitcher).current = "indexing"
         self.query_one("#status", Static).update(f"Indexing [b]{name}[/b]…")
         self.query_one("#detail", Static).update("Loading rows from HuggingFace…")
@@ -838,16 +850,33 @@ class SpladeTUI(App):
         spinner.set_class(False, "-hidden")
 
     def _on_index_done(self, name: str, elapsed: float) -> None:
+        self._indexing_name = None
+        with contextlib.suppress(Exception):
+            self.query_one("#index_btn", Button).disabled = False
         self._refresh_sidebar()
-        # find the new info and switch to search
         info = next((i for i in _list_indexes(self.indexes_dir) if i.name == name), None)
         if info is None:
-            self.query_one("#main", ContentSwitcher).current = "welcome"
+            self.notify(f"Indexed '{name}' but couldn't find it on disk", severity="warning")
             return
-        self.notify(f"Indexed {info.n_docs:,} docs in {elapsed:.1f}s", severity="information")
-        self._load_and_switch_to_search(info)
+        msg = f"Indexed '{info.name}' ({info.n_docs:,} docs in {elapsed:.1f}s)"
+        # Only auto-switch if the user is still watching the indexing pane.
+        # If they navigated away (e.g. to search a different index), just notify
+        # so we don't yank them off whatever they're doing.
+        switcher = self.query_one("#main", ContentSwitcher)
+        if switcher.current == "indexing":
+            self.notify(msg, severity="information")
+            self._load_and_switch_to_search(info)
+        else:
+            self.notify(
+                f"{msg} — pick it from the sidebar to search it",
+                severity="information",
+                timeout=6,
+            )
 
     def _on_index_failed(self, msg: str) -> None:
+        self._indexing_name = None
+        with contextlib.suppress(Exception):
+            self.query_one("#index_btn", Button).disabled = False
         self.query_one("#main", ContentSwitcher).current = "new"
         self.query_one("#error", Static).update(f"Index failed: {msg}")
 

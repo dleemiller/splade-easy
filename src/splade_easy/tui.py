@@ -571,7 +571,8 @@ class SpladeTUI(App):
     BINDINGS = [
         Binding("ctrl+n", "new_index", "New", show=True),
         Binding("ctrl+r", "refresh_sidebar", "Refresh", show=True),
-        Binding("ctrl+comma", "open_settings", "Settings", show=True),
+        # F2 because Ctrl+, isn't reliably forwarded by most terminals.
+        Binding("f2", "open_settings", "Settings", show=True),
         Binding("delete", "delete_focused", "Delete", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]

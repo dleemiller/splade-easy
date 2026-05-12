@@ -41,9 +41,14 @@ encode = [
 eval = [
     "datasets>=3.0",
 ]
+tui = [
+    "splade-easy[encode,eval]",
+    "textual>=0.80",
+]
 
 [project.scripts]
 splade-eval-nanobeir = "splade_easy.eval.nanobeir:main"
+splade-tui = "splade_easy.tui:main"
 
 [dependency-groups]
 dev = [

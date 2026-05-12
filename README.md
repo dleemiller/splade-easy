@@ -12,6 +12,7 @@ Target: indexes up to ~100k documents.
 uv add splade-easy                  # query-only (numpy + tokenizers)
 uv add 'splade-easy[encode]'        # also pulls torch + sentence-transformers for doc encoding
 uv add 'splade-easy[encode,eval]'   # adds NanoBEIR datasets loader
+uv add 'splade-easy[tui]'           # interactive TUI (also pulls encode + eval)
 ```
 
 Requires Python 3.11+.
@@ -39,6 +40,24 @@ retriever.save("./idx", corpus=corpus)
 retriever = se.SpladeRetriever.load("./idx", load_corpus=True)
 results, scores = retriever.retrieve("what is a feline?", k=2, return_docs=True)
 ```
+
+## Interactive TUI
+
+```bash
+uv sync --extra tui
+uv run splade-tui                       # opens the app
+uv run splade-tui --dataset BeIR/scifact  # prefill the new-index form
+```
+
+The TUI provides a sidebar of saved indexes on the left and a working area on the right. From the sidebar you can:
+
+- pick any existing index to jump straight into search
+- press **Ctrl+N** (or click `+ new index`) to fetch a HuggingFace dataset, pick its text column(s), pick a model, and index it
+- press **Del** on a focused index to delete it
+
+The new-index form fetches dataset metadata (configs, splits, columns) without downloading rows, then shows a 3-row preview of the columns you select so you can verify before committing to a long encode. Multiple selected columns are joined with newlines per row.
+
+All indexes go into one shared folder (default `~/.splade-easy/indexes/`, override with the `SPLADE_EASY_INDEX_DIR` env var or `--indexes-dir`). Each index is a normal `SpladeRetriever.save()` directory — you can load it from Python with `SpladeRetriever.load(path)` later.
 
 ## Using a different model
 

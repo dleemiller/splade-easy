@@ -41,6 +41,7 @@ try:
         Select,
         SelectionList,
         Static,
+        Switch,
     )
     from textual.widgets.selection_list import Selection
 except ImportError as exc:  # pragma: no cover
@@ -58,6 +59,49 @@ from .models import DEFAULT_MODEL, KNOWN_MODELS
 def _default_index_dir() -> Path:
     raw = os.environ.get("SPLADE_EASY_INDEX_DIR", "~/.splade-easy/indexes")
     return Path(raw).expanduser()
+
+
+def _config_path() -> Path:
+    """Persisted user settings, in the parent of the index dir."""
+    return _default_index_dir().parent / "config.json"
+
+
+# ---------- persisted user settings ----------
+
+
+@dataclass
+class Settings:
+    """Persisted user settings. Re-read on app start, written on Save in the modal."""
+
+    device: str = "auto"  # auto | cpu | cuda | cuda:0 | mps
+    batch_size: int = 32
+    max_seq_length: int | None = None  # None = model default
+    default_k: int = 10
+    save_corpus: bool = True
+
+    @classmethod
+    def load(cls, path: Path) -> Settings:
+        if not path.exists():
+            return cls()
+        try:
+            import json as _json
+
+            data = _json.loads(path.read_text())
+        except Exception:
+            return cls()
+        fields = cls.__dataclass_fields__
+        return cls(**{k: v for k, v in data.items() if k in fields})
+
+    def save(self, path: Path) -> None:
+        import json as _json
+        from dataclasses import asdict
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_json.dumps(asdict(self), indent=2))
+
+    def device_arg(self) -> str | None:
+        """Translate to the value passed to `encode_corpus(device=...)`."""
+        return None if self.device == "auto" else self.device
 
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -179,11 +223,13 @@ def _load_dataset_rows(
     columns: list[str],
     max_docs: int | None,
     progress_callback: Callable[[int, int | None], None] | None = None,
-) -> tuple[list[str], list[dict]]:
+) -> list[str]:
     """Stream rows up to `max_docs` (or all if None) and join the chosen columns.
 
     Uses `streaming=True` so a `max_docs=10000` request against a billion-doc
-    corpus only pulls the first parquet shard(s) it actually needs.
+    corpus only pulls the first parquet shard(s) it actually needs. Only the
+    joined text is kept per row — the full per-row dict the caller never used
+    isn't materialized, which was several GB of pure waste on a 1M-row index.
     """
     from datasets import load_dataset
 
@@ -194,18 +240,16 @@ def _load_dataset_rows(
     )
 
     texts: list[str] = []
-    raw: list[dict] = []
     for i, row in enumerate(ds):
         if max_docs is not None and max_docs > 0 and i >= max_docs:
             break
         text = "\n".join(str(row[c]) for c in columns if c in row and row[c] is not None)
         texts.append(text)
-        raw.append(dict(row))
         if progress_callback is not None and (i + 1) % 200 == 0:
             progress_callback(i + 1, max_docs)
     if progress_callback is not None:
         progress_callback(len(texts), max_docs)
-    return texts, raw
+    return texts
 
 
 # ---------- modal screens ----------
@@ -234,6 +278,95 @@ class ResultDetail(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with VerticalScroll():
             yield Static(f"[b]{self._title}[/b]\n\n{self._body}")
+
+
+class SettingsModal(ModalScreen["Settings | None"]):
+    """Adjust persisted settings. Returns the new Settings on Save, None on Cancel."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    CSS = """
+    SettingsModal { align: center middle; }
+    SettingsModal > Container {
+        width: 70; height: auto; max-height: 90%;
+        padding: 1 2;
+        border: round $primary; background: $surface;
+    }
+    SettingsModal .label { padding-top: 1; color: $accent; }
+    SettingsModal Input { margin-bottom: 0; }
+    SettingsModal .row { height: 3; }
+    SettingsModal .row Switch { margin-left: 1; }
+    SettingsModal Button { margin: 1 1 0 0; }
+    SettingsModal #buttons { height: auto; padding-top: 1; }
+    """
+
+    def __init__(self, current: Settings) -> None:
+        super().__init__()
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        s = self._current
+        with Container():
+            yield Static("[b]Settings[/b]")
+
+            yield Label("Device — where the encoder runs", classes="label")
+            yield Select[str](
+                options=[
+                    ("auto (detect)", "auto"),
+                    ("cpu", "cpu"),
+                    ("cuda", "cuda"),
+                    ("cuda:0", "cuda:0"),
+                    ("mps (Apple Silicon)", "mps"),
+                ],
+                value=s.device,
+                allow_blank=False,
+                id="s_device",
+            )
+
+            yield Label("Encoder batch size", classes="label")
+            yield Input(value=str(s.batch_size), id="s_batch_size")
+
+            yield Label("Max sequence length (blank = model default)", classes="label")
+            yield Input(value="" if s.max_seq_length is None else str(s.max_seq_length), id="s_msl")
+
+            yield Label("Default top-k in search", classes="label")
+            yield Input(value=str(s.default_k), id="s_k")
+
+            with Horizontal(classes="row"):
+                yield Label("Save corpus alongside index", classes="label")
+                yield Switch(value=s.save_corpus, id="s_save_corpus")
+
+            with Horizontal(id="buttons"):
+                yield Button("Save", id="save_btn", variant="primary")
+                yield Button("Cancel", id="cancel_btn")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#cancel_btn")
+    def _on_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#save_btn")
+    def _on_save(self) -> None:
+        try:
+            bs = max(1, int(self.query_one("#s_batch_size", Input).value or "32"))
+            msl_raw = self.query_one("#s_msl", Input).value.strip()
+            msl = int(msl_raw) if msl_raw else None
+            k = max(1, int(self.query_one("#s_k", Input).value or "10"))
+        except ValueError as e:
+            self.app.notify(f"Invalid number: {e}", severity="error")
+            return
+        device = self.query_one("#s_device", Select).value
+        if device is Select.BLANK:
+            device = "auto"
+        new = Settings(
+            device=str(device),
+            batch_size=bs,
+            max_seq_length=msl,
+            default_k=k,
+            save_corpus=self.query_one("#s_save_corpus", Switch).value,
+        )
+        self.dismiss(new)
 
 
 class ConfirmDelete(ModalScreen[bool]):
@@ -395,6 +528,8 @@ class SearchPanel(Container):
         yield Static("", id="info")
         with Horizontal(id="query_row"):
             yield Input(placeholder="Type a query and press Enter…", id="query")
+            # Initial value overwritten by SpladeTUI._load_and_switch_to_search()
+            # from settings.default_k.
             yield Input(value="10", id="k")
         table: DataTable = DataTable(id="results", zebra_stripes=True, cursor_type="row")
         table.add_columns("#", "Score", "Doc")
@@ -413,6 +548,7 @@ class Sidebar(Container):
     Sidebar #title { padding-bottom: 1; color: $accent; }
     Sidebar ListView { height: 1fr; }
     Sidebar #new_btn { width: 100%; margin-top: 1; }
+    Sidebar #settings_btn { width: 100%; margin-top: 0; }
     Sidebar .empty { color: $text-muted; padding: 1 0; }
     """
 
@@ -420,6 +556,7 @@ class Sidebar(Container):
         yield Static("Indexes (0)", id="title")
         yield ListView(id="index_list")
         yield Button("+ new index", id="new_btn", variant="primary")
+        yield Button("Settings", id="settings_btn")
 
 
 # ---------- main app ----------
@@ -434,6 +571,7 @@ class SpladeTUI(App):
     BINDINGS = [
         Binding("ctrl+n", "new_index", "New", show=True),
         Binding("ctrl+r", "refresh_sidebar", "Refresh", show=True),
+        Binding("ctrl+comma", "open_settings", "Settings", show=True),
         Binding("delete", "delete_focused", "Delete", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
     ]
@@ -450,6 +588,8 @@ class SpladeTUI(App):
         self._indexing_name: str | None = (
             None  # name of the dataset currently being indexed, or None
         )
+        self._config_path = _config_path()
+        self.settings: Settings = Settings.load(self._config_path)
 
     # ---- composition ----
 
@@ -491,6 +631,22 @@ class SpladeTUI(App):
 
     def action_refresh_sidebar(self) -> None:
         self._refresh_sidebar()
+
+    def action_open_settings(self) -> None:
+        def _on_done(result: Settings | None) -> None:
+            if result is not None:
+                self.settings = result
+                try:
+                    self.settings.save(self._config_path)
+                    self.notify("Settings saved", severity="information", timeout=3)
+                except Exception as e:
+                    self.notify(f"Failed to save settings: {e}", severity="error")
+
+        self.push_screen(SettingsModal(self.settings), _on_done)
+
+    @on(Button.Pressed, "#settings_btn")
+    def _on_settings_btn(self) -> None:
+        self.action_open_settings()
 
     def action_new_index(self) -> None:
         self.query_one("#main", ContentSwitcher).current = "new"
@@ -541,6 +697,8 @@ class SpladeTUI(App):
         info_widget = self.query_one("#info", Static)
         info_widget.update(f"[b]{info.name}[/b] · {info.n_docs:,} docs · model: {info.model_id}")
         self.query_one("#results", DataTable).clear()
+        # Pre-fill k from settings, then focus the query input.
+        self.query_one("#k", Input).value = str(self.settings.default_k)
         footnote = self.query_one("#footnote", Static)
         footnote.update("Enter a query; press Enter on a row to view the full doc.")
         self.query_one("#query", Input).focus()
@@ -794,7 +952,7 @@ class SpladeTUI(App):
                 else:
                     self.call_from_thread(detail.update, f"Streamed {done:,} rows so far…")
 
-            texts, _raw = _load_dataset_rows(
+            texts = _load_dataset_rows(
                 params["repo"],
                 params["config"],
                 params["split"],
@@ -820,7 +978,9 @@ class SpladeTUI(App):
             sparse_docs = encode_corpus(
                 texts,
                 model=params["model"],
-                batch_size=32,
+                batch_size=self.settings.batch_size,
+                device=self.settings.device_arg(),
+                max_seq_length=self.settings.max_seq_length,
                 show_progress=False,
                 progress_callback=_on_progress,
             )
@@ -830,7 +990,8 @@ class SpladeTUI(App):
             retriever.index(sparse_docs)
             target = self.indexes_dir / params["name"]
             self.call_from_thread(detail.update, f"Saving to {target}…")
-            retriever.save(target, corpus=texts)
+            corpus_arg = texts if self.settings.save_corpus else None
+            retriever.save(target, corpus=corpus_arg)
             elapsed = time.time() - t0
             self.call_from_thread(self._on_index_done, params["name"], elapsed)
         except Exception as e:

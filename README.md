@@ -40,9 +40,27 @@ retriever = se.SpladeRetriever.load("./idx", load_corpus=True)
 results, scores = retriever.retrieve("what is a feline?", k=2, return_docs=True)
 ```
 
-## Default model
+## Using a different model
 
-`opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill` is auto-paired with its bundled `idf.json` for query weighting. Override either side via the `model=` and `query_weights=` arguments.
+The default doc encoder is `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill`. Its bundled `idf.json` is fetched automatically and used for query-side weighting. To use a different model, pass `model="..."` to both `encode_corpus()` and `SpladeRetriever`:
+
+```python
+import splade_easy as se
+
+MODEL = "opensearch-project/opensearch-neural-sparse-encoding-doc-v2-distill"
+
+sparse_docs = se.encode_corpus(corpus, model=MODEL)
+retriever = se.SpladeRetriever(model=MODEL)
+retriever.index(sparse_docs)
+retriever.save("./idx", corpus=corpus)
+```
+
+Known-good inference-free SPLADE models (the registry in `splade_easy/models.py` is purely additive — any unknown HF model id is tried with safe defaults):
+
+- `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill` (default; English, ~67M)
+- `opensearch-project/opensearch-neural-sparse-encoding-doc-v2-distill` (English)
+- `opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1` (multilingual)
+- `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-gte` (English, ~137M) — note: this model's custom modeling code currently misbehaves when batching more than one document; single-doc encoding works.
 
 ## On-disk layout
 
@@ -59,29 +77,26 @@ idx/
 
 ## Performance
 
-Query latency, single thread, k=10, synthetic SPLADE-like corpus (vocab 30522, 100-250 nnz/doc):
+splade-easy vs [bm25s](https://github.com/xhluca/bm25s) on NanoBEIR (English subsets). Quality is full end-to-end retrieval; latency is `retrieve(text, k=10)` measured per query, single CPU thread.
 
-| corpus  | backend | mean ms/q | p95 ms/q | speedup |
-|---------|---------|-----------|----------|---------|
-| 10k     | numpy   | 0.171     | 0.262    | 1.0x    |
-| 10k     | cython  | **0.027** | 0.037    | 6.9x    |
-| 50k     | numpy   | 0.709     | 1.138    | 1.0x    |
-| 50k     | cython  | **0.103** | 0.150    | 7.0x    |
+| dataset  | retriever   | NDCG@10 | Recall@10 | MRR@10 | p50 ms/q | p95 ms/q |
+|----------|-------------|--------:|----------:|-------:|---------:|---------:|
+| scifact  | bm25s       |   0.710 |     0.830 |  0.678 |    0.099 |    0.132 |
+| scifact  | splade-easy | **0.743** | **0.930** | **0.687** | **0.050** |  **0.075** |
+| nq       | bm25s       |   0.501 |     0.760 |  0.427 |    0.095 |    0.191 |
+| nq       | splade-easy | **0.707** | **0.850** | **0.668** | **0.038** |  **0.047** |
+| fiqa     | bm25s       |   0.437 | **0.564** |  0.491 |    0.102 |    0.158 |
+| fiqa     | splade-easy | **0.482** |     0.553 | **0.545** | **0.044** |  **0.061** |
+| nfcorpus | bm25s       |   0.325 |     0.115 | **0.500** |    0.087 |    0.129 |
+| nfcorpus | splade-easy | **0.347** | **0.143** |  0.499 | **0.026** |  **0.038** |
 
-Reproduce: `uv run python benchmarks/bench_query.py --docs 50000 --queries 1000`.
+splade-easy uses the default `…-doc-v3-distill` model; bm25s uses English stopwords + Porter stemming (its README's recommended setup). Reproduce:
 
-## Quality (NanoBEIR)
+```bash
+uv run python benchmarks/bench_compare.py
+```
 
-Auto-eval with the default model on `zeta-alpha-ai/Nano*` subsets:
-
-| dataset  | NDCG@10 | Recall@10 | MRR@10 |
-|----------|---------|-----------|--------|
-| scifact  | 0.743   | 0.930     | 0.687  |
-| nq       | 0.707   | 0.850     | 0.669  |
-| fiqa     | 0.482   | 0.553     | 0.545  |
-| nfcorpus | 0.347   | 0.143     | 0.499  |
-
-Reproduce: `uv run splade-eval-nanobeir --datasets scifact,nq,fiqa,nfcorpus`.
+Doc encoding for splade-easy runs offline once (`encode_corpus()`) and is the slow part — minutes on CPU for ~5k docs, seconds on a GPU. The retrieval times above are what users actually pay at query time.
 
 ## Development
 
@@ -93,10 +108,6 @@ uv run python benchmarks/bench_query.py
 ```
 
 Cython hot path is in `src/splade_easy/_scoring.pyx`. A pure-numpy reference at `src/splade_easy/_scoring_py.py` is used in tests for parity checks and as a fallback when the C extension isn't built. The build is driven by `setup.py` + `setuptools.build_meta`.
-
-## Status
-
-Alpha.
 
 ## License
 

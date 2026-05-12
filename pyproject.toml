@@ -1,98 +1,80 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "cython>=3.0", "numpy>=2.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "splade-easy"
-version = "0.1.0"
-description = "Simple retriever for SPLADE encodings"
+version = "0.2.0"
+description = "Simple, fast inference-free SPLADE retriever for small indexes"
 readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Lee Miller" }]
+keywords = ["splade", "sparse", "retrieval", "search", "ir"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Indexing",
+]
 dependencies = [
-    "flatbuffers>=25.9.23",
-    "numba>=0.62.1",
-    "numpy>=2.3.4",
-    "rich>=14.2.0",
-    "sentence-transformers>=5.1.2",
+    "numpy>=2.0",
+    "tokenizers>=0.20",
+    "huggingface_hub>=0.25",
+]
+
+[project.optional-dependencies]
+encode = [
+    "torch>=2.4",
+    "sentence-transformers>=5.0",
+    # transformers 5.x has interop bugs with several inference-free SPLADE models'
+    # custom modeling code — gte's batched attention silently produces NaN
+    # encodings, persistent=False position_ids buffers come back uninitialized,
+    # and MLM-head weight tying gets skipped. Pinning to the 4.x line fixes all
+    # of these. sentence-transformers 5.5 accepts transformers>=4.41,<6, so this
+    # is well within its supported range.
+    "transformers>=4.55,<5",
+]
+eval = [
+    "datasets>=3.0",
 ]
 
 [project.scripts]
-ingest-dataset = "splade_easy.ingest.datasets:main"
-reshard = "splade_easy.reshard:main"
-search = "splade_easy.console:main"
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.4.2",
-    "pytest-benchmark>=5.1.0",
-]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/splade_easy"]
+splade-eval-nanobeir = "splade_easy.eval.nanobeir:main"
 
 [dependency-groups]
-datasets = [
-    "datasets>=4.3.0",
-    "pyyaml>=6.0.3",
-]
 dev = [
-    "pre-commit>=4.3.0",
-    "pytest>=8.4.2",
-    "pytest-cov>=7.0.0",
-    "ruff>=0.14.2",
+    "pytest>=8.0",
+    "pytest-benchmark>=5.0",
+    "ruff>=0.7",
+    "pyinstrument>=5.0",
+    "cython>=3.2.4",
+    "cython-lint>=0.19.0",
+    "pre-commit>=4.6.0",
+    "bm25s>=0.3.8",
+    "pystemmer>=3.0.0",
 ]
 
-# Ruff configuration
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"splade_easy" = ["py.typed"]
+
 [tool.ruff]
-target-version = "py39"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
-select = [
-    "E",      # pycodestyle errors
-    "W",      # pycodestyle warnings
-    "F",      # pyflakes
-    "I",      # isort
-    "B",      # flake8-bugbear
-    "SIM",    # flake8-simplify
-    "UP",     # pyupgrade
-]
-ignore = [
-    "E501",   # line too long (handled by formatter)
-]
+select = ["E", "W", "F", "I", "B", "SIM", "UP"]
+ignore = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["splade_easy"]
 
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-
-# Pytest configuration
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = [
-    "-v",
-    "--strict-markers",
-    "--tb=short",
-]
-
-# Coverage configuration
-[tool.coverage.run]
-source = ["src/splade_easy"]
-omit = [
-    "*/tests/*",
-    "*/SpladeEasy/*",  # Generated FlatBuffers code
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-]
+addopts = ["-v", "--tb=short"]

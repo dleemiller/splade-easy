@@ -1,35 +1,26 @@
-# .pre-commit-config.yaml
-
+# Run all hooks: `uv run pre-commit run --all-files`
+# Install:       `uv run pre-commit install`
 repos:
-  # Basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
-      - id: check-added-large-files
-      - id: check-merge-conflict
       - id: check-toml
-      - id: mixed-line-ending
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-ast
 
-  # Ruff linter and formatter
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
+    rev: v0.15.12
     hooks:
-      # Run linter with auto-fix
-      - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
-      # Run formatter
+      - id: ruff-check
+        args: [--fix]
       - id: ruff-format
 
-  # Run tests
-  - repo: local
+  - repo: https://github.com/MarcoGorelli/cython-lint
+    rev: v0.19.0
     hooks:
-      - id: pytest
-        name: pytest
-        entry: uv run pytest
-        language: system
-        types: [python]
-        pass_filenames: false
-        always_run: true
+      - id: cython-lint

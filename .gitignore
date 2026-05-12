@@ -168,6 +168,11 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+# Cython build artifacts (generated from .pyx; shipped via sdist only)
+src/splade_easy/_scoring.c
+src/splade_easy/_scoring.html
+/tmp/bench_query.prof
+
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

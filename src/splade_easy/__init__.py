@@ -1,4 +1,5 @@
 """splade-easy: simple inference-free SPLADE retrieval."""
+
 from __future__ import annotations
 
 from .retriever import SpladeRetriever

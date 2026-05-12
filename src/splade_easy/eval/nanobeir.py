@@ -5,19 +5,19 @@ NanoBEIR is a set of small BEIR subsets (~50 queries each) intended for fast ite
 Usage:
     uv run splade-eval-nanobeir --datasets nq,fiqa,scifact
 """
+
 from __future__ import annotations
 
 import argparse
 import json
 import sys
 import time
-from typing import Iterable
+from collections.abc import Iterable
 
 import numpy as np
 
 from .. import SpladeRetriever, encode_corpus
 from . import metrics
-
 
 NANOBEIR_REPOS: dict[str, str] = {
     "nq": "zeta-alpha-ai/NanoNQ",
@@ -166,7 +166,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(f"{'dataset':<16} {'NDCG@k':>8} {'Recall@k':>10} {'MRR@k':>8}")
         for name, r in results.items():
             print(f"{name:<16} {r['ndcg@k']:>8.4f} {r['recall@k']:>10.4f} {r['mrr@k']:>8.4f}")
-        print(f"{'MEAN':<16} {mean['ndcg@k']:>8.4f} {mean['recall@k']:>10.4f} {mean['mrr@k']:>8.4f}")
+        print(
+            f"{'MEAN':<16} {mean['ndcg@k']:>8.4f} {mean['recall@k']:>10.4f} {mean['mrr@k']:>8.4f}"
+        )
 
     return 0
 

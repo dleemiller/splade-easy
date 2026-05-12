@@ -1,11 +1,12 @@
 """Cython _scoring must produce identical output to the numpy reference `_scoring_py`."""
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from splade_easy import sparse
 from splade_easy import _scoring_py as ref
+from splade_easy import sparse
 
 cy = pytest.importorskip("splade_easy._scoring", reason="Cython extension not built")
 

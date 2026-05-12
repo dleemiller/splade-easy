@@ -1,4 +1,5 @@
 """Build the Cython scoring extension. Gracefully no-ops if Cython/numpy aren't installed."""
+
 from pathlib import Path
 
 from setuptools import setup

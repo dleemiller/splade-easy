@@ -1,4 +1,5 @@
 """Tests for the sparse-matrix container + CSR->CSC transpose."""
+
 from __future__ import annotations
 
 import numpy as np

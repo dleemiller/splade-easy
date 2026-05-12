@@ -1,4 +1,5 @@
 """End-to-end retriever roundtrip with a mocked tokenizer + IDF (no HF network)."""
+
 from __future__ import annotations
 
 import numpy as np

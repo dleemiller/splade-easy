@@ -3,11 +3,13 @@
 Index-time: needs sparse doc embeddings + tokenizer + IDF weights (fetched from HF).
 Query-time: tokenize + IDF lookup + score+topk over the CSC inverted index. No torch.
 """
+
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence, overload
+from typing import overload
 
 import numpy as np
 
@@ -52,9 +54,7 @@ class SpladeRetriever:
         from .encoder import fetch_query_weights, fetch_tokenizer
 
         self._tokenizer = fetch_tokenizer(self.model_id)
-        self._query_weights = fetch_query_weights(
-            self.model_id, self._tokenizer, self._vocab_size
-        )
+        self._query_weights = fetch_query_weights(self.model_id, self._tokenizer, self._vocab_size)
 
     # ---- persist ----
 
@@ -99,7 +99,7 @@ class SpladeRetriever:
         path: str | Path,
         mmap: bool = True,
         load_corpus: bool = False,
-    ) -> "SpladeRetriever":
+    ) -> SpladeRetriever:
         path = Path(path)
         params = json.loads((path / "params.json").read_text())
 
@@ -149,10 +149,7 @@ class SpladeRetriever:
             raise RuntimeError("Retriever not initialized — call index() or load() first")
 
         single = isinstance(queries, str)
-        if single:
-            queries_list = [queries]
-        else:
-            queries_list = list(queries)
+        queries_list = [queries] if single else list(queries)
 
         token_lists = self._tokenizer.encode_batch(queries_list)
         q_ids_list: list[np.ndarray] = []

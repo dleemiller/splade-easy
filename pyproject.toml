@@ -46,6 +46,7 @@ dev = [
     "pyinstrument>=5.0",
     "cython>=3.2.4",
     "cython-lint>=0.19.0",
+    "pre-commit>=4.6.0",
 ]
 
 [tool.setuptools.packages.find]

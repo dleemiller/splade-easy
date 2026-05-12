@@ -1,4 +1,5 @@
 """Tests for query tokenization wrapper and IDF application."""
+
 from __future__ import annotations
 
 import numpy as np

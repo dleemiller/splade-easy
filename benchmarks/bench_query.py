@@ -9,6 +9,7 @@ Run:
 cProfile inspection:
     uv run python -c "import pstats; pstats.Stats('/tmp/bench_query.prof').sort_stats('cumulative').print_stats(30)"
 """
+
 from __future__ import annotations
 
 import argparse
@@ -19,8 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
-from splade_easy import sparse
 from splade_easy import _scoring_py as ref
+from splade_easy import sparse
 
 try:
     from splade_easy import _scoring as cy
@@ -70,7 +71,9 @@ def make_synthetic_queries(n_queries: int, vocab: int = VOCAB, seed: int = 1) ->
     out = []
     for _ in range(n_queries):
         nq = int(rng.integers(5, 21))
-        out.append(np.unique(rng.choice(vocab, size=nq, replace=True, p=zipf_weights).astype(np.int32)))
+        out.append(
+            np.unique(rng.choice(vocab, size=nq, replace=True, p=zipf_weights).astype(np.int32))
+        )
     return out
 
 

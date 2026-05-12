@@ -1,4 +1,5 @@
 """Tests for IR metrics."""
+
 from __future__ import annotations
 
 import math
@@ -25,7 +26,7 @@ def test_ndcg_known_value():
     ranking = np.array([10, 20, 30], dtype=np.int32)
     qrels = {20: 1}
     # DCG = (2^1 - 1)/log2(3) = 1/log2(3); IDCG = 1/log2(2) = 1
-    expected = (1.0 / math.log2(3))
+    expected = 1.0 / math.log2(3)
     assert math.isclose(ndcg_at_k(ranking, qrels, k=3), expected, abs_tol=1e-6)
 
 

@@ -1,4 +1,5 @@
 """Reference numpy implementation of SPLADE scoring + top-k. Used in tests and as the fallback when the Cython extension is not built."""
+
 from __future__ import annotations
 
 import numpy as np

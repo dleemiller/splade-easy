@@ -1,4 +1,5 @@
 """Query-side tokenization + IDF lookup. No torch dependency."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,7 +15,7 @@ class QueryTokenizer:
         self._tok = tokenizer
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "QueryTokenizer":
+    def from_file(cls, path: str | Path) -> QueryTokenizer:
         return cls(Tokenizer.from_file(str(path)))
 
     def save(self, path: str | Path) -> None:
@@ -43,4 +44,6 @@ def apply_idf(token_ids: np.ndarray, idf: np.ndarray) -> tuple[np.ndarray, np.nd
         return token_ids.astype(np.int32, copy=False), np.zeros(0, dtype=np.float32)
     weights = idf[token_ids]
     mask = weights > 0
-    return token_ids[mask].astype(np.int32, copy=False), weights[mask].astype(np.float32, copy=False)
+    return token_ids[mask].astype(np.int32, copy=False), weights[mask].astype(
+        np.float32, copy=False
+    )

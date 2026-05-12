@@ -1,7 +1,8 @@
 """IR metrics: NDCG@k, Recall@k, MRR@k. Numpy-only, no pytrec_eval."""
+
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 import numpy as np
 

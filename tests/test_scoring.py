@@ -1,4 +1,5 @@
 """Tests for the numpy reference scoring path."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -41,7 +42,9 @@ def test_score_csc_unknown_token_silent():
     """A query token whose column is empty contributes 0."""
     ip, idx, d = _build_csc([[(0, 1.0)]], vocab=4)
     # Token 3 exists in vocab but no doc has it
-    scores = score_csc(ip, idx, d, np.array([3], dtype=np.int32), np.array([1.0], dtype=np.float32), n_docs=1)
+    scores = score_csc(
+        ip, idx, d, np.array([3], dtype=np.int32), np.array([1.0], dtype=np.float32), n_docs=1
+    )
     np.testing.assert_array_equal(scores, [0.0])
 
 

@@ -30,6 +30,13 @@ dependencies = [
 encode = [
     "torch>=2.4",
     "sentence-transformers>=5.0",
+    # transformers 5.x has interop bugs with several inference-free SPLADE models'
+    # custom modeling code — gte's batched attention silently produces NaN
+    # encodings, persistent=False position_ids buffers come back uninitialized,
+    # and MLM-head weight tying gets skipped. Pinning to the 4.x line fixes all
+    # of these. sentence-transformers 5.5 accepts transformers>=4.41,<6, so this
+    # is well within its supported range.
+    "transformers>=4.55,<5",
 ]
 eval = [
     "datasets>=3.0",

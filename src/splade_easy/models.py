@@ -23,17 +23,18 @@ class ModelSpec:
     # trust_remote_code=True; pinning keeps us reproducible even if the model
     # repo silently changes its `modeling.py`.
     code_revision: str | None = None
+    # When False, encode_corpus() raises before loading. Set with a `note`
+    # explaining why so users get an actionable error.
+    working: bool = True
+    note: str | None = None
 
 
 KNOWN_MODELS: dict[str, ModelSpec] = {
     # English, BERT-base backbone, ~67M params. Default.
     DEFAULT_MODEL: ModelSpec(doc_model_id=DEFAULT_MODEL),
     # English, GTE-base backbone (~137M). Ships custom transformer code on the Hub.
-    # NOTE: this model's custom modeling code currently produces all-NaN outputs
-    # when more than one document is encoded in a single batch through the current
-    # transformers + sentence-transformers stack. We auto-apply position_ids and
-    # weight-tying repairs in encoder.py, but there's a deeper batched-attention
-    # issue we can't fix from outside the model repo. Single-doc encoding works.
+    # Requires the transformers<5 pin from pyproject.toml (the `encode` extra
+    # pins it) plus our position_ids / weight-tying repairs in encoder.py.
     "opensearch-project/opensearch-neural-sparse-encoding-doc-v3-gte": ModelSpec(
         doc_model_id="opensearch-project/opensearch-neural-sparse-encoding-doc-v3-gte",
         trust_remote_code=True,

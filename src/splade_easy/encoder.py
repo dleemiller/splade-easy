@@ -29,6 +29,12 @@ def encode_corpus(
     """
     model_id = model or models.DEFAULT_MODEL
     spec = models.resolve(model_id)
+    if not spec.working:
+        raise RuntimeError(
+            f"Model {model_id!r} is marked as not-working in splade_easy.models.KNOWN_MODELS.\n"
+            f"Reason: {spec.note}\n"
+            "To attempt anyway, pass model= a different id or edit the registry."
+        )
     trc = spec.trust_remote_code if trust_remote_code is None else trust_remote_code
 
     # Lazy import: torch + sentence-transformers are heavy extras
@@ -63,14 +69,27 @@ def encode_corpus(
 
     token_ids_list: list[np.ndarray] = []
     weights_list: list[np.ndarray] = []
-    for emb in embs:
+    nan_doc: int | None = None
+    for i, emb in enumerate(embs):
         coo = emb.coalesce()
         idx = coo.indices()
         # 1D sparse vector: indices shape is (1, nnz); flatten to (nnz,)
         if idx.ndim == 2:
             idx = idx[0]
+        weights = coo.values().cpu().numpy().astype(np.float32)
+        if nan_doc is None and not np.all(np.isfinite(weights)):
+            nan_doc = i
         token_ids_list.append(idx.cpu().numpy().astype(np.int32))
-        weights_list.append(coo.values().cpu().numpy().astype(np.float32))
+        weights_list.append(weights)
+
+    if nan_doc is not None:
+        raise RuntimeError(
+            f"Document encoding produced NaN/Inf values (first observed at doc "
+            f"index {nan_doc}) for model {model_id!r}. This is a model/runtime "
+            "interop bug, not a splade-easy bug — the resulting index would be "
+            "useless. Try a different model or downgrade transformers / "
+            "sentence-transformers."
+        )
 
     return sparse.from_per_doc(token_ids_list, weights_list, vocab_size)
 

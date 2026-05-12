@@ -26,6 +26,7 @@ from splade_easy.eval.nanobeir import load_nanobeir
 
 DATASETS_DEFAULT = ["scifact", "nq", "fiqa", "nfcorpus"]
 DISTILL = "opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill"
+GTE = "opensearch-project/opensearch-neural-sparse-encoding-doc-v3-gte"
 WARMUP = 5
 
 
@@ -99,7 +100,8 @@ def main(argv: list[str] | None = None) -> int:
 
     backends: list[tuple[str, Callable]] = [
         ("bm25s", lambda t, q, r: bench_bm25s(t, q, r, args.k)),
-        ("splade-easy", lambda t, q, r: bench_splade(t, q, r, DISTILL, args.k)),
+        ("splade-distill", lambda t, q, r: bench_splade(t, q, r, DISTILL, args.k)),
+        ("splade-gte", lambda t, q, r: bench_splade(t, q, r, GTE, args.k)),
     ]
 
     for ds in names:

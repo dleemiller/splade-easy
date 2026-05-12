@@ -55,12 +55,16 @@ retriever.index(sparse_docs)
 retriever.save("./idx", corpus=corpus)
 ```
 
-Known-good inference-free SPLADE models (the registry in `splade_easy/models.py` is purely additive — any unknown HF model id is tried with safe defaults):
+Known inference-free SPLADE models. The registry in `splade_easy/models.py` is additive — any HF model id can be passed; the listing here documents which we've verified.
 
-- `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill` (default; English, ~67M)
-- `opensearch-project/opensearch-neural-sparse-encoding-doc-v2-distill` (English)
-- `opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1` (multilingual)
-- `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-gte` (English, ~137M) — note: this model's custom modeling code currently misbehaves when batching more than one document; single-doc encoding works.
+| model id | notes |
+|---|---|
+| `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill` | Default. English, BERT-base, ~67M params. |
+| `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-gte` | English, GTE-base custom backbone, ~137M. Higher NDCG than distill; same query latency. |
+| `opensearch-project/opensearch-neural-sparse-encoding-doc-v2-distill` | English, predecessor of v3-distill. |
+| `opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1` | Multilingual, XLM-R backbone. |
+
+The `[encode]` extra pins `transformers<5` because transformers 5.x has interop bugs with several of these models' custom modeling code (gte produces all-NaN encodings on multi-doc batches, position_ids buffers come back uninitialized, MLM-head weight tying gets skipped). sentence-transformers 5.5 supports the 4.x line, so this is a clean pin within its compatibility matrix.
 
 ## On-disk layout
 
@@ -77,20 +81,24 @@ idx/
 
 ## Performance
 
-splade-easy vs [bm25s](https://github.com/xhluca/bm25s) on NanoBEIR (English subsets). Quality is full end-to-end retrieval; latency is `retrieve(text, k=10)` measured per query, single CPU thread.
+splade-easy with two doc encoders vs [bm25s](https://github.com/xhluca/bm25s) on NanoBEIR (English subsets). Quality is full end-to-end retrieval; latency is `retrieve(text, k=10)` measured per query, single CPU thread.
 
-| dataset  | retriever   | NDCG@10 | Recall@10 | MRR@10 | p50 ms/q | p95 ms/q |
-|----------|-------------|--------:|----------:|-------:|---------:|---------:|
-| scifact  | bm25s       |   0.710 |     0.830 |  0.678 |    0.099 |    0.132 |
-| scifact  | splade-easy | **0.743** | **0.930** | **0.687** | **0.050** |  **0.075** |
-| nq       | bm25s       |   0.501 |     0.760 |  0.427 |    0.095 |    0.191 |
-| nq       | splade-easy | **0.707** | **0.850** | **0.668** | **0.038** |  **0.047** |
-| fiqa     | bm25s       |   0.437 | **0.564** |  0.491 |    0.102 |    0.158 |
-| fiqa     | splade-easy | **0.482** |     0.553 | **0.545** | **0.044** |  **0.061** |
-| nfcorpus | bm25s       |   0.325 |     0.115 | **0.500** |    0.087 |    0.129 |
-| nfcorpus | splade-easy | **0.347** | **0.143** |  0.499 | **0.026** |  **0.038** |
+| dataset  | model           | NDCG@10 | Recall@10 | MRR@10 | p50 ms/q | p95 ms/q |
+|----------|-----------------|--------:|----------:|-------:|---------:|---------:|
+| scifact  | bm25s           |   0.710 |     0.830 |  0.678 |    0.097 |    0.131 |
+| scifact  | splade-distill  |   0.743 |   **0.930** |  0.687 |    0.048 |    0.072 |
+| scifact  | splade-gte      | **0.798** |     0.910 | **0.770** |  **0.048** |  **0.074** |
+| nq       | bm25s           |   0.501 |     0.760 |  0.427 |    0.093 |    0.177 |
+| nq       | splade-distill  |   0.707 |     0.850 |  0.668 |  **0.037** |  **0.044** |
+| nq       | splade-gte      | **0.732** | **0.860** | **0.711** |    0.037 |    0.047 |
+| fiqa     | bm25s           |   0.437 |     0.564 |  0.491 |    0.086 |    0.123 |
+| fiqa     | splade-distill  |   0.482 |     0.553 |  0.545 |    0.044 |    0.067 |
+| fiqa     | splade-gte      | **0.568** | **0.653** | **0.633** |  **0.043** |  **0.062** |
+| nfcorpus | bm25s           |   0.325 |     0.115 |  0.500 |    0.089 |    0.120 |
+| nfcorpus | splade-distill  |   0.347 |     0.143 |  0.499 |  **0.025** |    0.041 |
+| nfcorpus | splade-gte      | **0.373** | **0.150** | **0.558** |    0.025 |  **0.038** |
 
-splade-easy uses the default `…-doc-v3-distill` model; bm25s uses English stopwords + Porter stemming (its README's recommended setup). Reproduce:
+splade-gte beats both bm25s and splade-distill on every NDCG@10 number, with the same query-time latency as splade-distill — the bigger encoder only costs at offline encode time, not query time. bm25s uses English stopwords + Porter stemming (its README's recommended setup). Reproduce:
 
 ```bash
 uv run python benchmarks/bench_compare.py

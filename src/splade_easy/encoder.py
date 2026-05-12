@@ -11,6 +11,13 @@ import numpy as np
 from . import models, sparse
 from .tokenizer import QueryTokenizer
 
+
+def _torch_float32():
+    import torch as _torch
+
+    return _torch.float32
+
+
 DEFAULT_MAX_SEQ_LENGTH = 512
 """Sane default for SPLADE retrieval. Some models (e.g. GTE-base) advertise much
 longer context (8192) but attention is O(B*H*N²) so the model's max-length default
@@ -26,6 +33,7 @@ def encode_corpus(
     show_progress: bool = True,
     trust_remote_code: bool | None = None,
     max_seq_length: int | None = None,
+    precision: str = "fp32",
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> sparse.SparseCorpus:
     """Encode a list of texts to a sparse corpus using a SPLADE document encoder.
@@ -37,6 +45,12 @@ def encode_corpus(
     `max_seq_length` defaults to 512 (see `DEFAULT_MAX_SEQ_LENGTH`); the model's
     own much-longer default would OOM the GPU during encode for most rigs and
     gives near-zero retrieval lift past ~512 tokens.
+
+    `precision` is one of "fp32" (default), "bf16", or "fp16". `bf16` roughly
+    halves GPU memory at the cost of slight numerical drift in the encoded
+    weights — for SPLADE retrieval that drift is well within noise. `bf16`
+    needs Ampere or newer (sm_80+); `fp16` works on any CUDA GPU. Output is
+    cast back to float32 before being returned, so callers see no dtype change.
 
     If `progress_callback` is supplied, it's invoked as `(n_done, n_total)` after
     each batch. The corpus is encoded in `batch_size`-sized chunks so the callback
@@ -58,6 +72,19 @@ def encode_corpus(
     model_kwargs: dict = {}
     if spec.code_revision is not None:
         model_kwargs["code_revision"] = spec.code_revision
+
+    # Load the model directly in the requested dtype rather than casting after
+    # construction — the post-load `enc.to(dtype)` route briefly held an fp32
+    # AND bf16 copy, which made `max_memory_allocated()` worse than fp32 for
+    # the same workload. transformers 4.57+ deprecated `torch_dtype` in favour
+    # of `dtype`; both still work today, we use the new name.
+    if precision != "fp32":
+        import torch as _torch
+
+        dtype = {"bf16": _torch.bfloat16, "fp16": _torch.float16}.get(precision)
+        if dtype is None:
+            raise ValueError(f"precision must be one of 'fp32', 'bf16', 'fp16'; got {precision!r}")
+        model_kwargs["dtype"] = dtype
 
     enc = SparseEncoder(
         model_id,
@@ -104,7 +131,9 @@ def encode_corpus(
         # 1D sparse vector: indices shape is (1, nnz); flatten to (nnz,)
         if idx.ndim == 2:
             idx = idx[0]
-        weights = coo.values().cpu().numpy().astype(np.float32)
+        # Cast values to float32 BEFORE numpy: numpy has no bfloat16 dtype,
+        # and `Tensor.numpy()` raises on bf16/fp16 even when we'd just astype.
+        weights = coo.values().to(dtype=_torch_float32()).cpu().numpy()
         if nan_doc is None and not np.all(np.isfinite(weights)):
             nan_doc = i
         token_ids_list.append(idx.cpu().numpy().astype(np.int32))

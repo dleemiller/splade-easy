@@ -74,8 +74,9 @@ class Settings:
     """Persisted user settings. Re-read on app start, written on Save in the modal."""
 
     device: str = "auto"  # auto | cpu | cuda | cuda:0 | mps
+    precision: str = "fp32"  # fp32 | bf16 | fp16 — encoder weight dtype
     batch_size: int = 32
-    max_seq_length: int | None = None  # None = model default
+    max_seq_length: int | None = None  # None = 512 default (see encoder.py)
     default_k: int = 10
     save_corpus: bool = True
 
@@ -322,6 +323,20 @@ class SettingsModal(ModalScreen["Settings | None"]):
                 id="s_device",
             )
 
+            yield Label(
+                "Precision — encoder weight dtype (bf16 ~halves GPU memory)", classes="label"
+            )
+            yield Select[str](
+                options=[
+                    ("fp32 (default, safest)", "fp32"),
+                    ("bf16 (Ampere+ / Blackwell)", "bf16"),
+                    ("fp16 (any CUDA GPU)", "fp16"),
+                ],
+                value=s.precision,
+                allow_blank=False,
+                id="s_precision",
+            )
+
             yield Label("Encoder batch size", classes="label")
             yield Input(value=str(s.batch_size), id="s_batch_size")
 
@@ -362,8 +377,12 @@ class SettingsModal(ModalScreen["Settings | None"]):
         device = self.query_one("#s_device", Select).value
         if device is Select.BLANK:
             device = "auto"
+        precision = self.query_one("#s_precision", Select).value
+        if precision is Select.BLANK:
+            precision = "fp32"
         new = Settings(
             device=str(device),
+            precision=str(precision),
             batch_size=bs,
             max_seq_length=msl,
             default_k=k,
@@ -992,6 +1011,7 @@ class SpladeTUI(App):
                 batch_size=self.settings.batch_size,
                 device=self.settings.device_arg(),
                 max_seq_length=self.settings.max_seq_length,
+                precision=self.settings.precision,
                 show_progress=False,
                 progress_callback=_on_progress,
             )

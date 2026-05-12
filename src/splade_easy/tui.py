@@ -278,16 +278,17 @@ class NewIndexPanel(Container):
     NewIndexPanel Input { margin-bottom: 0; }
     NewIndexPanel #preview { color: $text-muted; padding: 1 0; max-height: 10; }
     NewIndexPanel #error { color: $error; padding: 1 0; min-height: 1; }
-    NewIndexPanel #fetch_row { height: 3; }
-    NewIndexPanel Button { margin-right: 1; }
+    NewIndexPanel #fetch { margin: 1 0; }
     """
 
     def compose(self) -> ComposeResult:
         with VerticalScroll():
             yield Label("HuggingFace dataset id", classes="label")
-            with Horizontal(id="fetch_row"):
-                yield Input(placeholder="e.g. BeIR/scifact", id="repo")
-                yield Button("Fetch metadata", id="fetch")
+            yield Input(
+                placeholder="e.g. BeIR/scifact  (press Enter or click Fetch)",
+                id="repo",
+            )
+            yield Button("Fetch metadata", id="fetch", variant="primary")
             yield Static("", id="error")
 
             yield Label("Config (subset)", classes="label")
@@ -518,7 +519,14 @@ class SpladeTUI(App):
         self._dataset_meta = None
 
     @on(Button.Pressed, "#fetch")
-    def _on_fetch(self) -> None:
+    def _on_fetch_button(self) -> None:
+        self._trigger_fetch()
+
+    @on(Input.Submitted, "#repo")
+    def _on_fetch_submit(self) -> None:
+        self._trigger_fetch()
+
+    def _trigger_fetch(self) -> None:
         repo = self.query_one("#repo", Input).value.strip()
         if not repo:
             self.query_one("#error", Static).update("Dataset id is required")

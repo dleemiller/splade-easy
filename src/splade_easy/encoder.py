@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -20,12 +20,17 @@ def encode_corpus(
     show_progress: bool = True,
     trust_remote_code: bool | None = None,
     max_seq_length: int | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> sparse.SparseCorpus:
     """Encode a list of texts to a sparse corpus using a SPLADE document encoder.
 
     For known models, `trust_remote_code` defaults to whatever the registry says
     (e.g. True for the gte family). Pass it explicitly to override. Unknown
     models default to False (safe).
+
+    If `progress_callback` is supplied, it's invoked as `(n_done, n_total)` after
+    each batch. The corpus is encoded in `batch_size`-sized chunks so the callback
+    fires at a regular cadence; the model is loaded once and reused across chunks.
     """
     model_id = model or models.DEFAULT_MODEL
     spec = models.resolve(model_id)
@@ -53,12 +58,31 @@ def encode_corpus(
     if max_seq_length is not None:
         enc.max_seq_length = max_seq_length
 
-    embs = enc.encode_document(
-        list(corpus),
-        batch_size=batch_size,
-        convert_to_tensor=False,
-        show_progress_bar=show_progress,
-    )
+    corpus_list = list(corpus)
+    n_total = len(corpus_list)
+    embs: list = []
+    if progress_callback is not None:
+        # Batch manually so we can report progress between batches. The model and
+        # tokenizer stay loaded across batches so the overhead is just a few
+        # Python-level loop iterations.
+        for start in range(0, n_total, batch_size):
+            chunk = corpus_list[start : start + batch_size]
+            embs.extend(
+                enc.encode_document(
+                    chunk,
+                    batch_size=batch_size,
+                    convert_to_tensor=False,
+                    show_progress_bar=False,
+                )
+            )
+            progress_callback(min(start + batch_size, n_total), n_total)
+    else:
+        embs = enc.encode_document(
+            corpus_list,
+            batch_size=batch_size,
+            convert_to_tensor=False,
+            show_progress_bar=show_progress,
+        )
 
     vocab_size = _vocab_size(enc)
 

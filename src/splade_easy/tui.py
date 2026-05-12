@@ -35,6 +35,7 @@ try:
         ListItem,
         ListView,
         LoadingIndicator,
+        ProgressBar,
         Select,
         SelectionList,
         Static,
@@ -346,13 +347,19 @@ class IndexingPanel(Container):
     DEFAULT_CSS = """
     IndexingPanel { padding: 2 3; }
     IndexingPanel #status { padding-bottom: 1; }
-    IndexingPanel #detail { color: $text-muted; }
+    IndexingPanel #detail { color: $text-muted; padding-bottom: 1; }
+    IndexingPanel #progress { width: 100%; margin-bottom: 1; display: none; }
+    IndexingPanel #progress.-active { display: block; }
+    IndexingPanel #spinner.-hidden { display: none; }
     """
 
     def compose(self) -> ComposeResult:
         yield Static("", id="status")
         yield Static("", id="detail")
-        yield LoadingIndicator()
+        # Both are mounted; we toggle visibility via the -active / -hidden classes
+        # based on whether we have a known total to track.
+        yield ProgressBar(total=100, show_eta=True, id="progress")
+        yield LoadingIndicator(id="spinner")
 
 
 class SearchPanel(Container):
@@ -688,8 +695,10 @@ class SpladeTUI(App):
     @work(thread=True, exclusive=True, group="index")
     def _index_worker(self, params: dict) -> None:
         detail = self.query_one("#detail", Static)
+        progress = self.query_one("#progress", ProgressBar)
         try:
             t0 = time.time()
+            self.call_from_thread(self._show_spinner)
             texts, _raw = _load_dataset_rows(
                 params["repo"],
                 params["config"],
@@ -702,9 +711,24 @@ class SpladeTUI(App):
                 detail.update,
                 f"Encoding {n:,} docs with {params['model'].split('/')[-1]}…",
             )
+            self.call_from_thread(self._show_progress, n)
+
+            def _on_progress(done: int, total: int) -> None:
+                self.call_from_thread(progress.update, progress=done)
+                self.call_from_thread(
+                    detail.update,
+                    f"Encoding {done:,} / {total:,} docs"
+                    f" ({done / max(1, time.time() - t0):.0f} docs/s)",
+                )
+
             sparse_docs = encode_corpus(
-                texts, model=params["model"], batch_size=32, show_progress=False
+                texts,
+                model=params["model"],
+                batch_size=32,
+                show_progress=False,
+                progress_callback=_on_progress,
             )
+            self.call_from_thread(self._show_spinner)
             self.call_from_thread(detail.update, "Building inverted index…")
             retriever = SpladeRetriever(model=params["model"])
             retriever.index(sparse_docs)
@@ -715,6 +739,19 @@ class SpladeTUI(App):
             self.call_from_thread(self._on_index_done, params["name"], elapsed)
         except Exception as e:
             self.call_from_thread(self._on_index_failed, str(e))
+
+    def _show_progress(self, total: int) -> None:
+        progress = self.query_one("#progress", ProgressBar)
+        spinner = self.query_one("#spinner", LoadingIndicator)
+        progress.update(total=total, progress=0)
+        progress.set_class(True, "-active")
+        spinner.set_class(True, "-hidden")
+
+    def _show_spinner(self) -> None:
+        progress = self.query_one("#progress", ProgressBar)
+        spinner = self.query_one("#spinner", LoadingIndicator)
+        progress.set_class(False, "-active")
+        spinner.set_class(False, "-hidden")
 
     def _on_index_done(self, name: str, elapsed: float) -> None:
         self._refresh_sidebar()

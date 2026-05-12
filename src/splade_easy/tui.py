@@ -35,8 +35,7 @@ try:
         ListItem,
         ListView,
         LoadingIndicator,
-        RadioButton,
-        RadioSet,
+        Select,
         SelectionList,
         Static,
     )
@@ -292,9 +291,9 @@ class NewIndexPanel(Container):
             yield Static("", id="error")
 
             yield Label("Config (subset)", classes="label")
-            yield RadioSet(id="config_set")
+            yield Select[str](options=[], id="config_set", allow_blank=False)
             yield Label("Split", classes="label")
-            yield RadioSet(id="split_set")
+            yield Select[str](options=[], id="split_set", allow_blank=False)
             yield Label(
                 "Text column(s) — pick one or more; multiple are joined with newlines",
                 classes="label",
@@ -303,7 +302,19 @@ class NewIndexPanel(Container):
             yield Static("", id="preview")
 
             yield Label("Model", classes="label")
-            yield RadioSet(id="model_set")
+            yield Select[str](
+                options=[
+                    (
+                        f"{mid.split('/')[-1]}" + ("  (default)" if mid == DEFAULT_MODEL else ""),
+                        mid,
+                    )
+                    for mid, spec in KNOWN_MODELS.items()
+                    if spec.working
+                ],
+                value=DEFAULT_MODEL,
+                id="model_set",
+                allow_blank=False,
+            )
 
             yield Label("Index name (subdir under the indexes folder)", classes="label")
             yield Input(id="name")
@@ -497,22 +508,12 @@ class SpladeTUI(App):
             self.query_one(f"#{w_id}", Input).value = ""
         self.query_one("#preview", Static).update("")
         self.query_one("#error", Static).update("")
-        config_set = self.query_one("#config_set", RadioSet)
-        split_set = self.query_one("#split_set", RadioSet)
-        cols = self.query_one("#cols", SelectionList)
-        model_set = self.query_one("#model_set", RadioSet)
-        for ws in (config_set, split_set, model_set):
-            ws.remove_children()
-        cols.clear_options()
-        # Populate model choices once. Use the full model id as the label so
-        # users see exactly what they're picking; RadioSet only accepts RadioButton
-        # children, so don't mix in any other widget types here.
-        working_models = [mid for mid, spec in KNOWN_MODELS.items() if spec.working]
-        for i, mid in enumerate(working_models):
-            tag = "  (default)" if mid == DEFAULT_MODEL else ""
-            model_set.mount(RadioButton(f"{mid}{tag}", value=(mid == DEFAULT_MODEL), id=f"m_{i}"))
-        # Stash id->index mapping on the widget for later lookup
-        model_set.model_ids = working_models  # type: ignore[attr-defined]
+        # Clear config/split dropdowns until metadata is fetched.
+        self.query_one("#config_set", Select).set_options([])
+        self.query_one("#split_set", Select).set_options([])
+        self.query_one("#cols", SelectionList).clear_options()
+        # Reset model picker to the registered default.
+        self.query_one("#model_set", Select).value = DEFAULT_MODEL
         self._dataset_meta = None
 
     @on(Button.Pressed, "#fetch")
@@ -535,39 +536,34 @@ class SpladeTUI(App):
     def _on_metadata_loaded(self, repo: str, meta: DatasetMeta) -> None:
         self._dataset_meta = meta
         self.query_one("#error", Static).update("")
-        # populate config radio
-        config_set = self.query_one("#config_set", RadioSet)
-        config_set.remove_children()
-        for i, cfg in enumerate(meta.configs):
-            label = cfg if cfg else "(default)"
-            config_set.mount(RadioButton(label, value=(i == 0), id=f"c_{i}"))
-        config_set.config_names = meta.configs  # type: ignore[attr-defined]
-        # default name suggestion
+        # Populate config dropdown
+        config_set = self.query_one("#config_set", Select)
+        options = [(cfg if cfg else "(default)", cfg) for cfg in meta.configs]
+        config_set.set_options(options)
+        first_cfg = meta.configs[0] if meta.configs else ""
+        config_set.value = first_cfg
+        # Default name suggestion
         name_input = self.query_one("#name", Input)
         if not name_input.value:
             name_input.value = _slugify(repo)
-        # populate split + columns based on first config
-        self._on_config_changed(meta.configs[0] if meta.configs else "")
+        # Populate split + columns based on first config
+        self._on_config_changed(first_cfg)
 
-    @on(RadioSet.Changed, "#config_set")
-    def _config_changed(self, event: RadioSet.Changed) -> None:
+    @on(Select.Changed, "#config_set")
+    def _config_changed(self, event: Select.Changed) -> None:
         meta = self._dataset_meta
-        if meta is None or event.pressed is None:
+        if meta is None or event.value is Select.BLANK:
             return
-        idx = int(event.pressed.id.split("_")[1])
-        cfg = meta.configs[idx] if idx < len(meta.configs) else ""
-        self._on_config_changed(cfg)
+        self._on_config_changed(str(event.value))
 
     def _on_config_changed(self, cfg: str) -> None:
         meta = self._dataset_meta
         if meta is None:
             return
         splits = meta.splits_by_config.get(cfg, ["train"])
-        split_set = self.query_one("#split_set", RadioSet)
-        split_set.remove_children()
-        for i, s in enumerate(splits):
-            split_set.mount(RadioButton(s, value=(i == 0), id=f"s_{i}"))
-        split_set.split_names = splits  # type: ignore[attr-defined]
+        split_set = self.query_one("#split_set", Select)
+        split_set.set_options([(s, s) for s in splits])
+        split_set.value = splits[0]
 
         cols = meta.columns_by_config.get(cfg, [])
         col_widget = self.query_one("#cols", SelectionList)
@@ -615,35 +611,18 @@ class SpladeTUI(App):
         )
 
     def _current_config(self) -> str | None:
-        meta = self._dataset_meta
-        if meta is None:
+        v = self.query_one("#config_set", Select).value
+        if v is Select.BLANK or not v:
             return None
-        rs = self.query_one("#config_set", RadioSet)
-        pressed = rs.pressed_button
-        if pressed is None:
-            return meta.configs[0] if meta.configs else None
-        idx = int(pressed.id.split("_")[1])
-        cfg = meta.configs[idx] if idx < len(meta.configs) else ""
-        return cfg or None
+        return str(v)
 
     def _current_split(self) -> str:
-        rs = self.query_one("#split_set", RadioSet)
-        pressed = rs.pressed_button
-        if pressed is None:
-            names = getattr(rs, "split_names", ["train"])
-            return names[0]
-        idx = int(pressed.id.split("_")[1])
-        names = getattr(rs, "split_names", ["train"])
-        return names[idx] if idx < len(names) else "train"
+        v = self.query_one("#split_set", Select).value
+        return "train" if v is Select.BLANK else str(v)
 
     def _current_model(self) -> str:
-        rs = self.query_one("#model_set", RadioSet)
-        pressed = rs.pressed_button
-        ids = getattr(rs, "model_ids", [DEFAULT_MODEL])
-        if pressed is None:
-            return ids[0]
-        idx = int(pressed.id.split("_")[1])
-        return ids[idx] if idx < len(ids) else DEFAULT_MODEL
+        v = self.query_one("#model_set", Select).value
+        return DEFAULT_MODEL if v is Select.BLANK else str(v)
 
     @on(Button.Pressed, "#index_btn")
     def _on_index_btn(self) -> None:

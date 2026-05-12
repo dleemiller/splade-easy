@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-DEFAULT_MODEL = "opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill"
+DEFAULT_MODEL = "opensearch-project/opensearch-neural-sparse-encoding-doc-v3-gte"
 
 
 @dataclass(frozen=True)

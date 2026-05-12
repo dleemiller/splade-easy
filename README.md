@@ -61,7 +61,7 @@ All indexes go into one shared folder (default `~/.splade-easy/indexes/`, overri
 
 ## Using a different model
 
-The default doc encoder is `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill`. Its bundled `idf.json` is fetched automatically and used for query-side weighting. To use a different model, pass `model="..."` to both `encode_corpus()` and `SpladeRetriever`:
+The default doc encoder is `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-gte` — highest NDCG@10 on every NanoBEIR subset we tested, same query-time latency as the smaller models. Its bundled `idf.json` is fetched automatically and used for query-side weighting. To use a different model, pass `model="..."` to both `encode_corpus()` and `SpladeRetriever`:
 
 ```python
 import splade_easy as se
@@ -78,8 +78,8 @@ Known inference-free SPLADE models. The registry in `splade_easy/models.py` is a
 
 | model id | notes |
 |---|---|
-| `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill` | Default. English, BERT-base, ~67M params. |
-| `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-gte` | English, GTE-base custom backbone, ~137M. Higher NDCG than distill; same query latency. |
+| `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-gte` | Default. English, GTE-base custom backbone, ~137M params. |
+| `opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill` | English, BERT-base, ~67M. Smaller/faster to encode; lower NDCG. |
 | `opensearch-project/opensearch-neural-sparse-encoding-doc-v2-distill` | English, predecessor of v3-distill. |
 | `opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1` | Multilingual, XLM-R backbone. |
 
